@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1
+
+- Fix insert marker activation: open on pointerdown, enlarge hit area,
+  and keep the marker visible when the pointer moves onto it
+- Dependency updates: markdown-it 15, TypeScript 7, esbuild 0.28,
+  @types/node 26, VS Code actions majors
+
 ## 0.1.0
 
 - Inline block editing (headings, paragraphs, lists, tables, code,
