@@ -122,7 +122,7 @@
     "build:diagnostics": "npm run clean && npm run build:lab:ext && npm run build:lab:webview"
   },
   "dependencies": {
-    "@iconify-json/logos": "^1.2.19",
+    "@iconify-json/logos": "^1.2.20",
     "highlight.js": "^11.11.1",
     "markdown-it": "^14.1.0",
     "markdown-it-task-lists": "^2.1.1",
