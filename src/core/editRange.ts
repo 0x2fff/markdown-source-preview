@@ -33,11 +33,6 @@ export function lineStartOffsets(text: string): number[] {
   return offsets;
 }
 
-/** Counts lines the same way as VS Code's TextDocument.lineCount. */
-export function lineCount(text: string): number {
-  return lineStartOffsets(text).length;
-}
-
 function offsetAtLine(offsets: readonly number[], textLength: number, line: number): number {
   if (line <= 0) return 0;
   if (line >= offsets.length) return textLength;
@@ -62,17 +57,7 @@ export function detectLineEnding(source: string): '\r\n' | '\n' {
 
 function countEdgeLineEndings(text: string, atStart: boolean): number {
   const match = (atStart ? /^(?:\r\n|\n)+/ : /(?:\r\n|\n)+$/).exec(text)?.[0] ?? '';
-  let count = 0;
-  for (let index = 0; index < match.length;) {
-    if (match[index] === '\r' && match[index + 1] === '\n') {
-      count++;
-      index += 2;
-    } else {
-      count++;
-      index++;
-    }
-  }
-  return count;
+  return match.match(/\r\n|\r|\n/g)?.length ?? 0;
 }
 
 /**
@@ -96,18 +81,8 @@ export function insertionForGap(
   const beforeEndings = countEdgeLineEndings(before, false);
   const afterEndings = countEdgeLineEndings(after, true);
 
-  const prefix = before.length === 0 || beforeEndings >= 2
-    ? ''
-    : beforeEndings === 1
-      ? lineEnding
-      : lineEnding + lineEnding;
-  const suffix = after.length === 0
-    ? lineEnding
-    : afterEndings >= 2
-      ? ''
-      : afterEndings === 1
-        ? lineEnding
-        : lineEnding + lineEnding;
+  const prefix = before.length === 0 ? '' : lineEnding.repeat(2 - Math.min(beforeEndings, 2));
+  const suffix = after.length === 0 ? lineEnding : lineEnding.repeat(2 - Math.min(afterEndings, 2));
   return prefix + body + suffix;
 }
 
@@ -127,14 +102,6 @@ export function replacementForBlock(markdown: string, originalSource: string): s
     replacement += originalEnding;
   }
   return replacement;
-}
-
-export function applyRangeEdit(
-  text: string,
-  range: SourceRange,
-  replacement: string,
-): string {
-  return text.slice(0, range.startOffset) + replacement + text.slice(range.endOffset);
 }
 
 /**
@@ -170,21 +137,18 @@ export function findBlockSource(
 ): LocatedBlock | null {
   const offsets = lineStartOffsets(text);
   const byId = blocks.find(block => block.id === blockId);
-  if (byId) {
-    if (!isEditableBlockKind(byId.kind)) return null;
-    const range = sourceRangeForLines(text, byId.sourceStart, byId.sourceEnd, offsets);
-    const source = text.slice(range.startOffset, range.endOffset);
-    return hash(source) === baseSourceHash ? { block: byId, range, source } : null;
-  }
-
-  const matches: LocatedBlock[] = [];
-  for (const block of blocks) {
+  // A surviving ID must match by itself; otherwise exactly one editable
+  // block with identical content may inherit it.
+  const candidates = byId ? [byId] : blocks;
+  let found: LocatedBlock | null = null;
+  for (const block of candidates) {
     if (!isEditableBlockKind(block.kind)) continue;
     const range = sourceRangeForLines(text, block.sourceStart, block.sourceEnd, offsets);
     const source = text.slice(range.startOffset, range.endOffset);
     if (hash(source) !== baseSourceHash) continue;
-    matches.push({ block, range, source });
-    if (matches.length > 1) return null;
+    if (byId) return { block, range, source };
+    if (found) return null;
+    found = { block, range, source };
   }
-  return matches.length === 1 ? matches[0] : null;
+  return found;
 }

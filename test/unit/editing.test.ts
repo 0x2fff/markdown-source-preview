@@ -5,15 +5,22 @@ import { diffBlocks, parseDocument, stabilizeBlockIds } from '../../src/core/blo
 import { isEditableBlockKind } from '../../src/core/renderModel.js';
 import type { RenderBlock } from '../../src/core/renderModel.js';
 import {
-  applyRangeEdit,
   findBlockSource,
-  lineCount,
   lineStartOffsets,
   outsideRangeEqual,
   insertionForGap,
   replacementForBlock,
   sourceRangeForLines,
 } from '../../src/core/editRange.js';
+import type { SourceRange } from '../../src/core/editRange.js';
+
+function applyRangeEdit(source: string, range: SourceRange, replacement: string): string {
+  return source.slice(0, range.startOffset) + replacement + source.slice(range.endOffset);
+}
+
+function lineCount(text: string): number {
+  return lineStartOffsets(text).length;
+}
 
 function sha(source: string): string {
   return createHash('sha256').update(source, 'utf8').digest('hex');
@@ -439,7 +446,6 @@ describe('diffBlocks insert anchors', () => {
       contentHash: id,
       html: '',
       renderState: 'rendered',
-      estimatedHeight: -1,
     };
   }
 

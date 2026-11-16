@@ -1,5 +1,3 @@
-import type { PendingSave } from './editSaveController.js';
-
 export type EditMetricName =
   | 'islandStartMs'
   | 'asciiInputMs'
@@ -22,7 +20,8 @@ export interface EditMetrics {
   compositionStart(): void;
   compositionEnd(): void;
   consumeInput(): { startedAt: number; ime: boolean };
-  finishSave(pending: PendingSave | undefined): void;
+  beginSave(blockId: string, noOp: boolean): void;
+  finishSave(blockId: string): void;
   markCancel(): void;
   finishCancel(): void;
   patchApplied(changed: boolean): void;
@@ -41,21 +40,8 @@ const NAMES: EditMetricName[] = [
 ];
 
 function emptySamples(): Record<EditMetricName, number[]> {
-  return {
-    islandStartMs: [],
-    asciiInputMs: [],
-    imeCommitMs: [],
-    noOpSaveMs: [],
-    blockSaveMs: [],
-    cancelMs: [],
-  };
+  return Object.fromEntries(NAMES.map(name => [name, [] as number[]])) as Record<EditMetricName, number[]>;
 }
-
-const EMPTY_SNAPSHOT: EditMetricsSnapshot = {
-  samples: {} as Record<EditMetricName, number[]>,
-  longTasks: [],
-  longTaskMaxMs: null,
-};
 
 class EditMetricsController implements EditMetrics {
   private samples = emptySamples();
@@ -64,7 +50,7 @@ class EditMetricsController implements EditMetrics {
   private lastInputAt: number | undefined;
   private compositionStartedAt: number | undefined;
   private compositionEndedAt: number | undefined;
-  private pendingBlockSave: { at: number } | undefined;
+  private pendingSave: { blockId: string; noOp: boolean; at: number } | undefined;
   private cancelAt: number | undefined;
 
   record(name: EditMetricName, ms: number): void {
@@ -107,12 +93,17 @@ class EditMetricsController implements EditMetrics {
     return result;
   }
 
-  // Receives the save state consumed from EditSaveController; only the
-  // timing fields feed diagnostics.
-  finishSave(pending: PendingSave | undefined): void {
-    if (!pending) return;
-    if (pending.noOp) this.record('noOpSaveMs', performance.now() - pending.at);
-    else this.pendingBlockSave = { at: pending.at };
+  // Records diagnostics timing only; save exclusion lives in
+  // EditSaveController and remains active in production builds.
+  beginSave(blockId: string, noOp: boolean): void {
+    this.pendingSave = { blockId, noOp, at: performance.now() };
+  }
+
+  finishSave(blockId: string): void {
+    const pending = this.pendingSave;
+    if (!pending || pending.blockId !== blockId || !pending.noOp) return;
+    this.pendingSave = undefined;
+    this.record('noOpSaveMs', performance.now() - pending.at);
   }
 
   markCancel(): void {
@@ -122,13 +113,13 @@ class EditMetricsController implements EditMetrics {
   finishCancel(): void {
     if (this.cancelAt !== undefined) this.record('cancelMs', performance.now() - this.cancelAt);
     this.cancelAt = undefined;
-    this.pendingBlockSave = undefined;
+    this.pendingSave = undefined;
   }
 
   patchApplied(changed: boolean): void {
-    if (!changed || !this.pendingBlockSave) return;
-    this.record('blockSaveMs', performance.now() - this.pendingBlockSave.at);
-    this.pendingBlockSave = undefined;
+    if (!changed || !this.pendingSave) return;
+    this.record('blockSaveMs', performance.now() - this.pendingSave.at);
+    this.pendingSave = undefined;
   }
 
   recordLongTask(duration: number): void {
@@ -143,7 +134,7 @@ class EditMetricsController implements EditMetrics {
     this.lastInputAt = undefined;
     this.compositionStartedAt = undefined;
     this.compositionEndedAt = undefined;
-    this.pendingBlockSave = undefined;
+    this.pendingSave = undefined;
     this.cancelAt = undefined;
   }
 
@@ -158,24 +149,4 @@ class EditMetricsController implements EditMetrics {
   }
 }
 
-const NOOP_METRICS: EditMetrics = {
-  record: () => {},
-  markBegin: () => {},
-  consumeBegin: () => undefined,
-  markKeyInput: () => {},
-  compositionStart: () => {},
-  compositionEnd: () => {},
-  consumeInput: () => ({ startedAt: 0, ime: false }),
-  finishSave: () => {},
-  markCancel: () => {},
-  finishCancel: () => {},
-  patchApplied: () => {},
-  recordLongTask: () => {},
-  reset: () => {},
-  snapshot: () => EMPTY_SNAPSHOT,
-};
-
-// Diagnostics builds get the real controller; production builds get a
-// no-op so timing state, metric names, and sample storage are eliminated.
-export const editMetrics: EditMetrics =
-  __MARKDOWN_SOURCE_PREVIEW_LAB__ ? new EditMetricsController() : NOOP_METRICS;
+export const editMetrics = /* @__PURE__ */ new EditMetricsController();

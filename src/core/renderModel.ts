@@ -16,23 +16,27 @@ export type BlockKind =
   | 'hr'
   | 'other';
 
+const EDITABLE_BLOCK_KINDS = new Set<string>([
+  'frontmatter',
+  'heading',
+  'paragraph',
+  'bullet_list',
+  'ordered_list',
+  'blockquote',
+  'fence',
+  'code_block',
+  'table',
+  'mermaid',
+  'html_block',
+  'hr',
+]);
+
 /** Whether the block's Markdown source can be edited directly in a textarea. */
 export function isEditableBlockKind(kind: string): boolean {
-  return kind === 'frontmatter'
-    || kind === 'heading'
-    || kind === 'paragraph'
-    || kind === 'bullet_list'
-    || kind === 'ordered_list'
-    || kind === 'blockquote'
-    || kind === 'fence'
-    || kind === 'code_block'
-    || kind === 'table'
-    || kind === 'mermaid'
-    || kind === 'html_block'
-    || kind === 'hr';
+  return EDITABLE_BLOCK_KINDS.has(kind);
 }
 
-export type BlockRenderState =
+type BlockRenderState =
   | 'pending'     // HTML not yet generated
   | 'plain'       // shown as plain text, awaiting decoration
   | 'rendered'    // HTML rendered, highlight/mermaid pending
@@ -47,14 +51,12 @@ export interface RenderBlock {
   readonly sourceStart: number;
   /** End line in the source (exclusive). */
   readonly sourceEnd: number;
-  /** First 16 chars of the block source SHA-256, used for diffing. */
+  /** FNV-1a 32-bit hash of the block source (8 hex chars), used for diffing. */
   readonly contentHash: string;
   /** Rendered HTML; empty while pending. */
   html: string;
   /** Current render state. */
   renderState: BlockRenderState;
-  /** Estimated height in px for scroll hints; -1 when unknown. */
-  estimatedHeight: number;
 }
 
 // ---------- Document ----------
@@ -158,7 +160,7 @@ export interface InitPayload {
 /** Host-side prepare timings embedded directly in the payload. */
 export interface PatchHostTimings {
   /** Total of getText + parse + diff + serialize (ms). */
-  prepareMs: number;
+  hostPrepareMs: number;
   getTextMs: number;
   parseMs: number;
   buildBlocksMs: number;
@@ -185,7 +187,6 @@ export interface BlockPatch {
   blockId: string;
   /** Present for insert/update only. */
   html?: string;
-  renderState?: BlockRenderState;
   /** Block content hash for diff verification. */
   contentHash?: string;
   /** For insert: place immediately before this block ID. */

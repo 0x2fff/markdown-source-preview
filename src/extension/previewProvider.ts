@@ -9,9 +9,9 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DocumentSession } from './documentSession.js';
+import type { UpdateTimings } from './documentSession.js';
 import { detectReadonly } from './readonlyState.js';
-import { sliceInitial, wrapBlock } from '../core/blockParser.js';
-import { slugifyHeading } from '../core/blockParser.js';
+import { escAttr, slugifyHeading, wrapBlock } from '../core/blockParser.js';
 import {
   detectLineEnding,
   findBlockSource,
@@ -36,24 +36,13 @@ import type {
 
 /** Patch send record kept per generation. */
 interface PendingPatch {
-  session: DocumentSession;
-  generation: number;
   /** Timestamp just before the postMessage call (performance.now()). */
   sentAt: number;
-  /** Host time from getText to diff completion (ms). */
-  hostPrepareMs: number;
-  getTextMs: number;
-  parseMs: number;
-  buildBlocksMs: number;
-  diffMs: number;
-  serializeEstimateMs: number;
-  messageBytes: number;
-  changedBlockCount: number;
+  timings: UpdateTimings;
   blockIds: string[];
   hostChangeReceivedEpochMs: number;
   debounceMs: number;
   hostPatchSentEpochMs: number;
-  hostAckReceivedEpochMs?: number;
 }
 
 interface ScrollSyncState {
@@ -62,14 +51,19 @@ interface ScrollSyncState {
   eventTimer?: ReturnType<typeof setTimeout>;
   pendingSourceLine?: number;
   readonly receivedPreviewTokens: Set<string>;
-  readyMessages: number;
 }
 
-interface PendingDisposeRequest {
-  session: DocumentSession;
-  resolve: (cleanup: WebviewCleanupSnapshot) => void;
+interface PendingRequest {
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+}
+
+interface PendingResponse<T> extends PendingRequest {
+  resolve: (value: T) => void;
+}
+
+interface PendingDisposeRequest extends PendingResponse<WebviewCleanupSnapshot> {
+  session: DocumentSession;
 }
 
 interface ActiveBlockEdit {
@@ -96,12 +90,9 @@ interface PanelEditState {
   contextMermaidBlockId?: string;
 }
 
-interface PendingDraftRequest {
+interface PendingDraftRequest extends PendingResponse<string> {
   panel: vscode.WebviewPanel;
   blockId: string;
-  resolve: (draft: string) => void;
-  reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
 }
 
 export class PreviewProvider implements vscode.CustomTextEditorProvider {
@@ -113,10 +104,8 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
   private readonly _panels = new Map<vscode.WebviewPanel, DocumentSession>();
   private readonly _editStates = new Map<vscode.WebviewPanel, PanelEditState>();
   private readonly _sessions = new Map<string, Set<DocumentSession>>();
-  private readonly _sessionIds = new WeakMap<DocumentSession, number>();
-  private _nextSessionId = 1;
-  // session + generation → send record (avoids parsing console.log)
-  private readonly _pendingPatches = new Map<string, PendingPatch>();
+  // session → generation → send record (avoids parsing console.log)
+  private readonly _pendingPatches = new Map<DocumentSession, Map<number, PendingPatch>>();
   private readonly _pendingDisposeRequests = new Map<string, PendingDisposeRequest>();
   private readonly _pendingDraftRequests = new Map<string, PendingDraftRequest>();
   private _activePanel: vscode.WebviewPanel | undefined;
@@ -154,9 +143,7 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
   async toggleEditMode(): Promise<void> {
     const startedAt = performance.now();
     const panel = this._activePanel;
-    if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-      this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_TOGGLE] panel=${Boolean(panel)} state=${Boolean(panel && this._editStates.get(panel))}`);
-    }
+    this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_TOGGLE] panel=${Boolean(panel)} state=${Boolean(panel && this._editStates.get(panel))}`);
     if (!panel) return;
     const state = this._editStates.get(panel);
     if (!state) return;
@@ -205,9 +192,7 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
     }
 
     const blockId = state.contextMermaidBlockId;
-    const block = blockId
-      ? session.latestParsed?.blocks.find(candidate => candidate.id === blockId)
-      : undefined;
+    const block = blockId ? session.findBlock(blockId) : null;
     if (!block || block.kind !== 'mermaid') {
       void vscode.window.showInformationMessage(
         '先に Mermaid 図を右クリックしてください。',
@@ -215,14 +200,12 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
       return;
     }
 
-    if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-      this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_MERMAID_GUI] ${JSON.stringify({
-        blockId: block.id,
-        sourceStart: block.sourceStart,
-        sourceEnd: block.sourceEnd,
-        commands: getMermaidGraphicalCommands(),
-      })}`);
-    }
+    this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_MERMAID_GUI] ${JSON.stringify({
+      blockId: block.id,
+      sourceStart: block.sourceStart,
+      sourceEnd: block.sourceEnd,
+      commands: getMermaidGraphicalCommands(),
+    })}`);
 
     await revealMermaidSource(session.document, block);
 
@@ -269,15 +252,11 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
     const documentSessions = this._sessions.get(documentUri) ?? new Set<DocumentSession>();
     documentSessions.add(session);
     this._sessions.set(documentUri, documentSessions);
-    this._sessionIds.set(session, this._nextSessionId++);
     this._panels.set(webviewPanel, session);
-    if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-      this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_SESSION_CREATED] ${JSON.stringify({
-        uri: documentUri,
-        sessionId: this._sessionIds.get(session),
-        activeSessions: documentSessions.size,
-      })}`);
-    }
+    this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_SESSION_CREATED] ${JSON.stringify({
+      uri: documentUri,
+      activeSessions: documentSessions.size,
+    })}`);
 
     webviewPanel.webview.options = {
       enableScripts: true,
@@ -291,7 +270,7 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
     const initPayload = session.buildInitPayload(0);
     webviewPanel.webview.html = this._buildWebviewHtml(webviewPanel.webview, initPayload.initialHtml);
 
-    const scrollSyncState: ScrollSyncState = { receivedPreviewTokens: new Set(), readyMessages: 0 };
+    const scrollSyncState: ScrollSyncState = { receivedPreviewTokens: new Set() };
 
     const messageDisposable = webviewPanel.webview.onDidReceiveMessage(
       (msg: WebviewToHost) =>
@@ -324,9 +303,7 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
         const line = scrollSyncState.pendingSourceLine;
         if (line === undefined || !webviewPanel.visible) return;
         const token = crypto.randomUUID();
-        if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-          this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_SCROLL] source token=${token} line=${line}`);
-        }
+        this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_SCROLL] source token=${token} line=${line}`);
         webviewPanel.webview.postMessage({
           type: 'scroll',
           payload: { line, origin: 'source', token },
@@ -350,9 +327,7 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
           change.rangeOffset < activeEdit.endOffset
           && change.rangeOffset + change.rangeLength > activeEdit.startOffset);
         if (affectsActiveBlock) {
-          if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-            this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_EXTERNAL] blockId=${activeEdit.blockId} affectsTarget=true`);
-          }
+          this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_EXTERNAL] blockId=${activeEdit.blockId} affectsTarget=true`);
           void webviewPanel.webview.postMessage({
             type: 'edit-error',
             payload: {
@@ -419,27 +394,22 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
       if (currentSessions?.size === 0) this._sessions.delete(documentUri);
       this._deletePendingPatches(session);
       const pendingAcks = this._pendingPatchCount(session);
-      for (const [requestId, pendingRequest] of this._pendingDisposeRequests) {
-        if (pendingRequest.session !== session) continue;
-        clearTimeout(pendingRequest.timer);
-        this._pendingDisposeRequests.delete(requestId);
-        pendingRequest.reject(new Error('Preview panel was disposed before cleanup preparation completed'));
-      }
-      for (const [requestId, pendingRequest] of this._pendingDraftRequests) {
-        if (pendingRequest.panel !== webviewPanel) continue;
-        clearTimeout(pendingRequest.timer);
-        this._pendingDraftRequests.delete(requestId);
-        pendingRequest.reject(new Error('Preview panel was disposed before the edit draft was received'));
-      }
-      if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-        this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_HOST_DISPOSED] ${JSON.stringify({
-          uri: documentUri,
-          sessionId: this._sessionIds.get(session),
-          pendingAcks,
-          sessionRemoved: !currentSessions?.has(session),
-          activeSessions: currentSessions?.size ?? 0,
-        })}`);
-      }
+      this._rejectPending(
+        this._pendingDisposeRequests,
+        request => request.session === session,
+        'Preview panel was disposed before cleanup preparation completed',
+      );
+      this._rejectPending(
+        this._pendingDraftRequests,
+        request => request.panel === webviewPanel,
+        'Preview panel was disposed before the edit draft was received',
+      );
+      this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_HOST_DISPOSED] ${JSON.stringify({
+        uri: documentUri,
+        pendingAcks,
+        sessionRemoved: !currentSessions?.has(session),
+        activeSessions: currentSessions?.size ?? 0,
+      })}`);
       disposeListener.dispose();
     });
     this._ctx.subscriptions.push(panelDisposables, disposeListener);
@@ -450,31 +420,16 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
     if (!panel) throw new Error('No visible Markdown Source Preview panel to prepare for disposal');
     const session = this._panels.get(panel);
     if (!session) throw new Error('Visible Preview panel has no active document session');
-    const requestId = crypto.randomUUID();
 
-    const response = new Promise<WebviewCleanupSnapshot>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this._pendingDisposeRequests.delete(requestId);
-        reject(new Error('Timed out waiting for Webview dispose-prepared response'));
-      }, 5_000);
-      this._pendingDisposeRequests.set(requestId, { session, resolve, reject, timer });
-    });
-
-    try {
-      const posted = await panel.webview.postMessage({
-        type: 'prepare-dispose',
-        payload: { requestId },
-      } satisfies HostToWebview);
-      if (!posted) throw new Error('Could not send prepare-dispose request to the Webview');
-    } catch (error) {
-      const pending = this._pendingDisposeRequests.get(requestId);
-      if (pending) {
-        clearTimeout(pending.timer);
-        this._pendingDisposeRequests.delete(requestId);
-        pending.reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    }
-    await response;
+    await this._postRequest<WebviewCleanupSnapshot, PendingDisposeRequest>(
+      panel,
+      this._pendingDisposeRequests,
+      (_requestId, resolve, reject, timer) => ({ session, resolve, reject, timer }),
+      requestId => ({ type: 'prepare-dispose', payload: { requestId } }),
+      5_000,
+      'Timed out waiting for Webview dispose-prepared response',
+      'Could not send prepare-dispose request to the Webview',
+    );
   }
 
 
@@ -487,10 +442,7 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
   ): void {
     switch (msg.type) {
       case 'ready': {
-        scrollSyncState.readyMessages++;
-        if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-          this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_READY] count=${scrollSyncState.readyMessages}`);
-        }
+        this._logDiagnostics('[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_READY]');
         // The webview startup handshake guarantees the init listener is ready.
         panel.webview.postMessage({ type: 'init', payload: initPayload } satisfies HostToWebview);
         const editState = this._editStates.get(panel);
@@ -522,9 +474,7 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
         const edit = this._editStates.get(panel)?.activeEdit;
         if (edit?.blockId === msg.payload.blockId) {
           edit.draft = msg.payload.markdown;
-          if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-            this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_DRAFT] blockId=${edit.blockId} requestId=${msg.payload.requestId ?? 'input'} length=${msg.payload.markdown.length}`);
-          }
+          this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_DRAFT] blockId=${edit.blockId} requestId=${msg.payload.requestId ?? 'input'} length=${msg.payload.markdown.length}`);
           if (msg.payload.requestId) {
             const pending = this._pendingDraftRequests.get(msg.payload.requestId);
             if (pending?.panel === panel && pending.blockId === edit.blockId) {
@@ -584,9 +534,7 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
           break;
         }
         if (scrollSyncState.receivedPreviewTokens.has(token)) {
-          if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-            this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_SCROLL] duplicate token=${token}`);
-          }
+          this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_SCROLL] duplicate token=${token}`);
           break;
         }
         scrollSyncState.receivedPreviewTokens.add(token);
@@ -600,9 +548,7 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
         if (!editor || !Number.isInteger(line) || line < 0) break;
 
         const targetLine = Math.min(line, session.document.lineCount - 1);
-        if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-          this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_SCROLL] accepted token=${token} line=${targetLine}`);
-        }
+        this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_SCROLL] accepted token=${token} line=${targetLine}`);
         scrollSyncState.suppressSourceEchoUntil = Date.now() + 500;
         clearTimeout(scrollSyncState.suppressionTimer);
         scrollSyncState.suppressionTimer = setTimeout(() => {
@@ -623,32 +569,27 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
         if (!pending || pending.session !== session) break;
         clearTimeout(pending.timer);
         this._pendingDisposeRequests.delete(requestId);
-        if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-          this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_PREPARED] ${JSON.stringify({
-            requestId,
-            uri: session.document.uri.toString(),
-            sessionId: this._sessionIds.get(session),
-            cleanup,
-          })}`);
-        }
+        this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_PREPARED] ${JSON.stringify({
+          requestId,
+          uri: session.document.uri.toString(),
+          cleanup,
+        })}`);
         pending.resolve(cleanup);
         break;
       }
       case 'webview-disposed-best-effort': {
-        if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-          this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_POST_CLOSE_ACK] ${JSON.stringify({
-            uri: session.document.uri.toString(),
-            cleanup: msg.payload.cleanup,
-          })}`);
-        }
+        this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_POST_CLOSE_ACK] ${JSON.stringify({
+          uri: session.document.uri.toString(),
+          cleanup: msg.payload.cleanup,
+        })}`);
         break;
       }
       case 'patch-applied': {
         if (!__MARKDOWN_SOURCE_PREVIEW_LAB__) break;
         const gen = msg.payload.generation;
-        const key = this._pendingPatchKey(session, gen);
-        const pending = this._pendingPatches.get(key);
-        if (!pending) {
+        const sessionPatches = this._pendingPatches.get(session);
+        const pending = sessionPatches?.get(gen);
+        if (!sessionPatches || !pending) {
           console.warn(`[MARKDOWN_SOURCE_PREVIEW_PERF] patch-applied without pending patch gen=${gen}`);
           // Ignore orphan acks from older generations
           break;
@@ -659,27 +600,26 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
         if (acknowledgedIds.length !== expectedIds.length
           || acknowledgedIds.some((id, index) => id !== expectedIds[index])) {
           console.error(`[MARKDOWN_SOURCE_PREVIEW_PERF] patch-ack correlation mismatch gen=${gen} expected=${expectedIds.join(',')} actual=${acknowledgedIds.join(',')}`);
-          this._pendingPatches.delete(key);
+          sessionPatches.delete(gen);
           break;
         }
-        this._pendingPatches.delete(key);
+        sessionPatches.delete(gen);
 
         const diagnostics = msg.payload.diagnostics;
         if (!diagnostics) break;
         const patchAckMs = +(performance.now() - pending.sentAt).toFixed(1);
         const hostAckReceivedEpochMs = Date.now();
         const domApplyMs = +diagnostics.domApplyMs.toFixed(1);
-        pending.hostAckReceivedEpochMs = hostAckReceivedEpochMs;
         const hostToWebviewReceiveMs = diagnostics.webviewReceivedEpochMs - pending.hostPatchSentEpochMs;
         const webviewToHostAckMs = hostAckReceivedEpochMs - diagnostics.ackSentEpochMs;
 
         console.log(
           `[MARKDOWN_SOURCE_PREVIEW_PERF] patch-ack gen=${gen}` +
-          ` hostPrepareMs=${pending.hostPrepareMs}` +
+          ` hostPrepareMs=${pending.timings.hostPrepareMs}` +
           ` patchAckMs=${patchAckMs}` +
           ` domApplyMs=${domApplyMs}` +
           ` blocks=${msg.payload.blockIds.length}` +
-          ` bytes=${pending.messageBytes}`,
+          ` bytes=${pending.timings.messageBytes}`,
         );
 
         // Expose the ack on a window global so diagnostics can read it
@@ -690,35 +630,18 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
             event: 'ack-record',
             ms: patchAckMs,
             extra: {
+              ...pending.timings,
+              ...diagnostics,
               generation: gen,
-              hostPrepareMs: pending.hostPrepareMs,
-              getTextMs: pending.getTextMs,
-              parseMs: pending.parseMs,
-              buildBlocksMs: pending.buildBlocksMs,
-              diffMs: pending.diffMs,
-              serializeEstimateMs: pending.serializeEstimateMs,
               patchAckMs,
               domApplyMs,
-              changedBlockCount: pending.changedBlockCount,
-              messageBytes: pending.messageBytes,
               blockIds: pending.blockIds,
               hostChangeReceivedEpochMs: pending.hostChangeReceivedEpochMs,
               debounceMs: pending.debounceMs,
               hostPatchSentEpochMs: pending.hostPatchSentEpochMs,
               hostAckReceivedEpochMs,
               hostToWebviewReceiveMs,
-              webviewQueueWaitMs: diagnostics.webviewQueueWaitMs,
-              webviewReceivedEpochMs: diagnostics.webviewReceivedEpochMs,
-              domApplyStartedEpochMs: diagnostics.domApplyStartedEpochMs,
-              domApplyEndedEpochMs: diagnostics.domApplyEndedEpochMs,
-              ackSentEpochMs: diagnostics.ackSentEpochMs,
               webviewToHostAckMs,
-              queueLengthAtReceive: diagnostics.queueLengthAtReceive,
-              urgentQueueLengthAtReceive: diagnostics.urgentQueueLengthAtReceive,
-              urgentStartWaitMs: diagnostics.urgentStartWaitMs,
-              backgroundChunkLastMs: diagnostics.backgroundChunkLastMs,
-              backgroundChunkMaxMs: diagnostics.backgroundChunkMaxMs,
-              backgroundChunkCount: diagnostics.backgroundChunkCount,
             },
           },
         } satisfies HostToWebview);
@@ -852,9 +775,7 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
 
     if (activeEdit) {
       const dirty = activeEdit.draft !== activeEdit.editorSource;
-      if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-        this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_EXIT] blockId=${activeEdit.blockId} dirty=${dirty}`);
-      }
+      this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_EXIT] blockId=${activeEdit.blockId} dirty=${dirty}`);
       if (dirty) {
         // Edit → read auto-saves without a confirmation dialog. Keep edit
         // mode only on failure; _commitBlockEdit shows the warning. A blur
@@ -884,15 +805,11 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
 
   private _beginBlockEdit(blockId: string, panel: vscode.WebviewPanel, session: DocumentSession): void {
     const state = this._editStates.get(panel);
-    if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-      this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_BEGIN_REQ] blockId=${blockId} mode=${state?.mode} readonly=${state?.readonly} active=${Boolean(state?.activeEdit)}`);
-    }
+    this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_BEGIN_REQ] blockId=${blockId} mode=${state?.mode} readonly=${state?.readonly} active=${Boolean(state?.activeEdit)}`);
     if (!state || state.readonly || state.mode !== 'edit' || state.activeEdit) return;
-    const block = session.latestParsed?.blocks.find(candidate => candidate.id === blockId);
+    const block = session.findBlock(blockId);
     if (!block || !isEditableBlockKind(block.kind)) {
-      if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-        this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_BEGIN_REJECT] blockId=${blockId} found=${Boolean(block)} kind=${block?.kind}`);
-      }
+      this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_BEGIN_REJECT] blockId=${blockId} found=${Boolean(block)} kind=${block?.kind}`);
       panel.webview.postMessage({
         type: 'edit-error',
         payload: { blockId, message: 'このブロックは編集できません。' },
@@ -917,18 +834,16 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
       externalChange: false,
     };
     const activeEdit = state.activeEdit;
-    if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-      this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_BEGIN] ${JSON.stringify({
-        blockId,
-        version: document.version,
-        sourceStart: block.sourceStart,
-        sourceEnd: block.sourceEnd,
-        startOffset: range.startOffset,
-        endOffset: range.endOffset,
-        sourceHash: activeEdit.baseSourceHash,
-        originalBytes: Buffer.byteLength(source, 'utf8'),
-      })}`);
-    }
+    this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_BEGIN] ${JSON.stringify({
+      blockId,
+      version: document.version,
+      sourceStart: block.sourceStart,
+      sourceEnd: block.sourceEnd,
+      startOffset: range.startOffset,
+      endOffset: range.endOffset,
+      sourceHash: activeEdit.baseSourceHash,
+      originalBytes: Buffer.byteLength(source, 'utf8'),
+    })}`);
     panel.webview.postMessage({
       type: 'edit-started',
       payload: { blockId, source: activeEdit.editorSource },
@@ -1085,13 +1000,11 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
     session: DocumentSession,
   ): Promise<void> {
     const state = this._editStates.get(panel);
-    if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-      this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_INSERT_REQ] ${JSON.stringify({
-        mode: state?.mode, readonly: state?.readonly,
-        beforeBlockId: payload.beforeBlockId, afterBlockId: payload.afterBlockId,
-        markdownLength: payload.markdown.length,
-      })}`);
-    }
+    this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_INSERT_REQ] ${JSON.stringify({
+      mode: state?.mode, readonly: state?.readonly,
+      beforeBlockId: payload.beforeBlockId, afterBlockId: payload.afterBlockId,
+      markdownLength: payload.markdown.length,
+    })}`);
     if (!state || state.readonly || state.mode !== 'edit') return;
     if (!payload.markdown.trim()) return;
 
@@ -1105,14 +1018,12 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
     const after = payload.afterBlockId !== undefined
       ? parsed.blocks.find(block => block.id === payload.afterBlockId)
       : undefined;
-    if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-      this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_INSERT_ANCHOR] ${JSON.stringify({
-        beforeBlockId: payload.beforeBlockId ?? null,
-        afterBlockId: payload.afterBlockId ?? null,
-        resolvedBefore: Boolean(before), resolvedAfter: Boolean(after),
-        ids: parsed.blocks.slice(0, 8).map(block => block.id),
-      })}`);
-    }
+    this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_INSERT_ANCHOR] ${JSON.stringify({
+      beforeBlockId: payload.beforeBlockId ?? null,
+      afterBlockId: payload.afterBlockId ?? null,
+      resolvedBefore: Boolean(before), resolvedAfter: Boolean(after),
+      ids: parsed.blocks.slice(0, 8).map(block => block.id),
+    })}`);
     if ((payload.beforeBlockId !== undefined && !before)
       || (payload.afterBlockId !== undefined && !after)) {
       void vscode.window.showWarningMessage(
@@ -1138,14 +1049,12 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
       offset = text.length;
     }
 
-    if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-      this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_INSERT] ${JSON.stringify({
-        beforeBlockId: payload.beforeBlockId ?? null,
-        afterBlockId: payload.afterBlockId ?? null,
-        resolvedBefore: Boolean(before), resolvedAfter: Boolean(after),
-        offset, blockCount: parsed.blocks.length,
-      })}`);
-    }
+    this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_INSERT] ${JSON.stringify({
+      beforeBlockId: payload.beforeBlockId ?? null,
+      afterBlockId: payload.afterBlockId ?? null,
+      resolvedBefore: Boolean(before), resolvedAfter: Boolean(after),
+      offset, blockCount: parsed.blocks.length,
+    })}`);
 
     const insertion = insertionForGap(payload.markdown, text, offset, detectLineEnding(text));
     if (!insertion) return;
@@ -1153,9 +1062,7 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
     const edit = new vscode.WorkspaceEdit();
     edit.insert(document.uri, document.positionAt(offset), insertion);
     const applied = await vscode.workspace.applyEdit(edit);
-    if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-      this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_INSERT_APPLIED] applied=${applied}`);
-    }
+    this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_INSERT_APPLIED] applied=${applied}`);
   }
 
   private async _showEditConflict(
@@ -1166,9 +1073,7 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
     const activeEdit = state.activeEdit;
     if (!activeEdit) return;
     const blockId = activeEdit.blockId;
-    if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-      this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_CONFLICT] blockId=${blockId}`);
-    }
+    this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_CONFLICT] blockId=${blockId}`);
     void panel.webview.postMessage({
       type: 'edit-error',
       payload: { blockId, message: 'このブロックは編集中に外部で変更されました。' },
@@ -1181,9 +1086,7 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
     if (choice !== '外部変更を表示') return;
     this._finishBlockEdit(panel, state, 'discarded');
     this._refreshBlock(panel, session, blockId);
-    if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-      this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_CONFLICT_KEEP_SOURCE] blockId=${blockId}`);
-    }
+    this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_CONFLICT_KEEP_SOURCE] blockId=${blockId}`);
   }
 
   private _refreshBlock(
@@ -1191,7 +1094,7 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
     session: DocumentSession,
     blockId: string,
   ): void {
-    const block = session.latestParsed?.blocks.find(candidate => candidate.id === blockId);
+    const block = session.findBlock(blockId);
     if (!block) return;
     void panel.webview.postMessage({
       type: 'refresh-block',
@@ -1211,7 +1114,6 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
     afterBytes: number;
     noOp: boolean;
   }): void {
-    if (!__MARKDOWN_SOURCE_PREVIEW_LAB__ || process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS !== '1') return;
     const { activeEdit } = entry;
     this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_SAVE] ${JSON.stringify({
       blockId: activeEdit.blockId,
@@ -1232,7 +1134,6 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
   }
 
   private _logEditMode(mode: 'read' | 'edit', ms: number): void {
-    if (!__MARKDOWN_SOURCE_PREVIEW_LAB__ || process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS !== '1') return;
     this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_MODE] ${JSON.stringify({
       mode,
       ms: +ms.toFixed(3),
@@ -1254,40 +1155,19 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
   }
 
   private _requestEditDraft(panel: vscode.WebviewPanel, edit: ActiveBlockEdit): Promise<string> {
-    const requestId = crypto.randomUUID();
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this._pendingDraftRequests.delete(requestId);
-        reject(new Error('Timed out waiting for the active Markdown draft'));
-      }, 10000);
-      this._pendingDraftRequests.set(requestId, {
-        panel,
-        blockId: edit.blockId,
-        resolve,
-        reject,
-        timer,
-      });
-      panel.webview.postMessage({
+    return this._postRequest<string, PendingDraftRequest>(
+      panel,
+      this._pendingDraftRequests,
+      (_requestId, resolve, reject, timer) => ({ panel, blockId: edit.blockId, resolve, reject, timer }),
+      requestId => ({
         type: 'query-edit-draft',
         payload: { requestId, blockId: edit.blockId },
-      }).then(posted => {
-        if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-          this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_DRAFT_QUERY] requestId=${requestId} posted=${posted}`);
-        }
-        if (posted) return;
-        const pending = this._pendingDraftRequests.get(requestId);
-        if (!pending) return;
-        clearTimeout(pending.timer);
-        this._pendingDraftRequests.delete(requestId);
-        pending.reject(new Error('Could not request the active Markdown draft'));
-      }, error => {
-        const pending = this._pendingDraftRequests.get(requestId);
-        if (!pending) return;
-        clearTimeout(pending.timer);
-        this._pendingDraftRequests.delete(requestId);
-        pending.reject(error instanceof Error ? error : new Error(String(error)));
-      });
-    });
+      }),
+      10_000,
+      'Timed out waiting for the active Markdown draft',
+      'Could not request the active Markdown draft',
+      '[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_EDIT_DRAFT_QUERY]',
+    );
   }
 
   private _postEditMode(panel: vscode.WebviewPanel, state: PanelEditState): void {
@@ -1306,13 +1186,11 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
       return;
     }
 
-    if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-      this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_MODE] ${JSON.stringify({
-        mode: state.readonly ? 'readonly' : state.mode,
-        readonly: state.readonly,
-        visible: panel.visible,
-      })}`);
-    }
+    this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_MODE] ${JSON.stringify({
+      mode: state.readonly ? 'readonly' : state.mode,
+      readonly: state.readonly,
+      visible: panel.visible,
+    })}`);
 
     if (state.readonly) {
       this._editModeStatus.hide();
@@ -1339,15 +1217,13 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
 
   private async _isDocumentReadonly(document: vscode.TextDocument): Promise<boolean> {
     const result = await detectReadonly(document.uri);
-    if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
-      this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_READONLY] ${JSON.stringify({
-        uri: document.uri.toString(),
-        scheme: document.uri.scheme,
-        readonly: result.readonly,
-        reason: result.reason,
-        mode: result.mode,
-      })}`);
-    }
+    this._logDiagnostics(`[MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_READONLY] ${JSON.stringify({
+      uri: document.uri.toString(),
+      scheme: document.uri.scheme,
+      readonly: result.readonly,
+      reason: result.reason,
+      mode: result.mode,
+    })}`);
     return result.readonly;
   }
 
@@ -1357,19 +1233,14 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
 
   private _sendRestBlocks(panel: vscode.WebviewPanel, session: DocumentSession): void {
     const doc = session.latestParsed;
-    if (!doc) return;
+    const restBlocks = session.restBlocks;
+    if (!doc || !restBlocks.length) return;
 
-    const config = this._getConfig();
-    const slice = sliceInitial(doc, {
-      blockLimit: config.initialBlockLimit,
-      htmlCharLimit: config.initialHtmlCharLimit,
-    });
-
-    const patches: BlockPatch[] = slice.restBlocks.map(b => ({
+    const patches: BlockPatch[] = restBlocks.map(b => ({
       op: 'insert' as const,
       blockId: b.id,
       html: wrapBlock(b),
-      renderState: b.renderState,
+      contentHash: b.contentHash,
     }));
 
     const patchMsg: HostToWebview = {
@@ -1394,12 +1265,12 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
     if (session.disposed) return;
     const prepared = session.prepareUpdate(document, changes);
     const gen = prepared.message.payload.generation;
-    const key = this._pendingPatchKey(session, gen);
+    const pendingPatches = this._pendingPatches.get(session);
 
     // Drop stale pending patches when advancing generations so no patch is left waiting for an ack.
-    for (const [pendingKey, pending] of this._pendingPatches) {
-      if (pending.session === session && pending.generation < gen) {
-        this._pendingPatches.delete(pendingKey);
+    if (pendingPatches) {
+      for (const pendingGeneration of pendingPatches.keys()) {
+        if (pendingGeneration < gen) pendingPatches.delete(pendingGeneration);
       }
     }
 
@@ -1409,18 +1280,14 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
       // Register right before postMessage; setting it earlier avoids missing very fast acks.
       const hostPatchSentEpochMs = Date.now();
       sentAt = performance.now();
-      this._pendingPatches.set(key, {
-        session,
-        generation: gen,
+      let patches = pendingPatches;
+      if (!patches) {
+        patches = new Map();
+        this._pendingPatches.set(session, patches);
+      }
+      patches.set(gen, {
         sentAt,
-        hostPrepareMs: timings.hostPrepareMs,
-        getTextMs: timings.getTextMs,
-        parseMs: timings.parseMs,
-        buildBlocksMs: timings.buildBlocksMs,
-        diffMs: timings.diffMs,
-        serializeEstimateMs: timings.serializeEstimateMs,
-        messageBytes: timings.messageBytes,
-        changedBlockCount: timings.changedBlockCount,
+        timings,
         blockIds: prepared.message.payload.patches.map(patch => patch.blockId),
         hostChangeReceivedEpochMs,
         debounceMs,
@@ -1446,28 +1313,74 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
   }
 
   private _logDiagnostics(message: string): void {
-    if (!__MARKDOWN_SOURCE_PREVIEW_LAB__) return;
+    if (!__MARKDOWN_SOURCE_PREVIEW_LAB__ || process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS !== '1') return;
     console.log(message);
     const logPath = process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS_LOG;
     if (logPath) fs.appendFileSync(logPath, `${message}\n`, 'utf8');
   }
 
-  private _pendingPatchKey(session: DocumentSession, generation: number): string {
-    return `${this._sessionIds.get(session)}:${generation}`;
+  private _settlePendingRequest<T extends PendingRequest>(
+    requests: Map<string, T>,
+    requestId: string,
+    error: unknown,
+  ): void {
+    const pending = requests.get(requestId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    requests.delete(requestId);
+    pending.reject(error instanceof Error ? error : new Error(String(error)));
+  }
+
+  private _rejectPending<T extends PendingRequest>(
+    requests: Map<string, T>,
+    matches: (request: T) => boolean,
+    message: string,
+  ): void {
+    for (const [requestId, request] of requests) {
+      if (matches(request)) this._settlePendingRequest(requests, requestId, new Error(message));
+    }
+  }
+
+  private _postRequest<T, P extends PendingResponse<T>>(
+    panel: vscode.WebviewPanel,
+    requests: Map<string, P>,
+    createEntry: (
+      requestId: string,
+      resolve: (value: T) => void,
+      reject: (error: Error) => void,
+      timer: ReturnType<typeof setTimeout>,
+    ) => P,
+    message: (requestId: string) => HostToWebview,
+    timeoutMs: number,
+    timeoutMessage: string,
+    postFailureMessage: string,
+    logLabel?: string,
+  ): Promise<T> {
+    const requestId = crypto.randomUUID();
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        requests.delete(requestId);
+        reject(new Error(timeoutMessage));
+      }, timeoutMs);
+      requests.set(requestId, createEntry(requestId, resolve, reject, timer));
+      panel.webview.postMessage(message(requestId)).then(
+        posted => {
+          if (logLabel) {
+            this._logDiagnostics(`${logLabel} requestId=${requestId} posted=${posted}`);
+          }
+          if (!posted) this._settlePendingRequest(requests, requestId, new Error(postFailureMessage));
+        },
+        error => this._settlePendingRequest(requests, requestId, error),
+      );
+    });
   }
 
   private _pendingPatchCount(session: DocumentSession): number {
-    let count = 0;
-    for (const pending of this._pendingPatches.values()) {
-      if (pending.session === session) count++;
-    }
-    return count;
+    return this._pendingPatches.get(session)?.size ?? 0;
   }
 
   private _deletePendingPatches(session: DocumentSession): void {
-    for (const [key, pending] of this._pendingPatches) {
-      if (pending.session === session) this._pendingPatches.delete(key);
-    }
+    this._pendingPatches.delete(session);
   }
 
 
@@ -1518,8 +1431,4 @@ ${initialHtml}
       debounceMs: cfg.get<number>('debounceMs', 16),
     };
   }
-}
-
-function escAttr(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }

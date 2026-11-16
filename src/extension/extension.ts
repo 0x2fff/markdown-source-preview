@@ -36,12 +36,15 @@ export function activate(ctx: vscode.ExtensionContext): void {
     }),
   );
 
-  ctx.subscriptions.push(
-    vscode.commands.registerCommand('markdownSourcePreview.toggleEditMode', () => provider.toggleEditMode()),
-    vscode.commands.registerCommand('markdownSourcePreview.enterEditMode', () => provider.enterEditMode()),
-    vscode.commands.registerCommand('markdownSourcePreview.exitEditMode', () => provider.exitEditMode()),
-    vscode.commands.registerCommand('markdownSourcePreview.openMermaidGraphicalEditor', () => provider.openMermaidGraphicalEditor()),
-  );
+  const providerCommands: ReadonlyArray<[string, () => Promise<void>]> = [
+    ['markdownSourcePreview.toggleEditMode', () => provider.toggleEditMode()],
+    ['markdownSourcePreview.enterEditMode', () => provider.enterEditMode()],
+    ['markdownSourcePreview.exitEditMode', () => provider.exitEditMode()],
+    ['markdownSourcePreview.openMermaidGraphicalEditor', () => provider.openMermaidGraphicalEditor()],
+  ];
+  for (const [command, handler] of providerCommands) {
+    ctx.subscriptions.push(vscode.commands.registerCommand(command, handler));
+  }
 
   if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && process.env.MARKDOWN_SOURCE_PREVIEW_DIAGNOSTICS === '1') {
     ctx.subscriptions.push(
@@ -103,8 +106,4 @@ export function activate(ctx: vscode.ExtensionContext): void {
       ctx.subscriptions.push({ dispose: () => fs.unwatchFile(channelPath, pump) });
     }
   }
-}
-
-export function deactivate(): void {
-  // noop — subscriptions are disposed automatically
 }

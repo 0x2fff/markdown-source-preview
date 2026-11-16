@@ -8,13 +8,13 @@
  * - highlight.js is dynamically imported, off the first-paint path.
  */
 
-type Hljs = { highlightElement(el: HTMLElement): void };
+import { loadHljs, type HighlightApi } from './highlightLoader.js';
+import { cancelIdleCallback, requestIdleCallback } from './idleCallback.js';
 
 const SELECTOR = 'pre code[class*="language-"]';
 const VIEWPORT_MARGIN = '1000px'; // IntersectionObserver rootMargin
 
 export class HighlightQueue {
-  private _hljsPromise: Promise<Hljs> | null = null;
   private _observer: IntersectionObserver | null = null;
   private _mutationObserver: MutationObserver | null = null;
   private _idleHandle: number | null = null;
@@ -44,7 +44,6 @@ export class HighlightQueue {
   dispose(): void {
     this._disposed = true;
     this._detach();
-    this._hljsPromise = null;
   }
 
   get cleanupState(): {
@@ -80,7 +79,7 @@ export class HighlightQueue {
     }
     if (hits.length === 0) return;
 
-    this._loadHljs().then((hljs) => {
+    loadHljs().then((hljs) => {
       if (this._observer !== observer) return;
       for (const el of hits) {
         this._highlightOne(hljs, el);
@@ -90,7 +89,7 @@ export class HighlightQueue {
     });
   }
 
-  private _highlightOne(hljs: Hljs, el: HTMLElement): void {
+  private _highlightOne(hljs: HighlightApi, el: HTMLElement): void {
     if (!el.isConnected || el.dataset.hlState === 'done') return;
     try { hljs.highlightElement(el); } catch { /* ignore */ }
     el.dataset.hlState = 'done';
@@ -107,7 +106,7 @@ export class HighlightQueue {
     this._idleHandle = requestIdleCallback(
       (deadline) => {
         this._idleHandle = null;
-        this._loadHljs().then((hljs) => {
+        loadHljs().then((hljs) => {
           if (this._observer !== observer) return;
           let count = 0;
           const all = document.querySelectorAll<HTMLElement>(SELECTOR);
@@ -128,13 +127,6 @@ export class HighlightQueue {
     );
   }
 
-  private _loadHljs(): Promise<Hljs> {
-    if (!this._hljsPromise) {
-      this._hljsPromise = import('highlight.js/lib/common').then((m: any) => m.default as Hljs);
-    }
-    return this._hljsPromise;
-  }
-
   private _detach(): void {
     this._observer?.disconnect();
     this._mutationObserver?.disconnect();
@@ -144,24 +136,5 @@ export class HighlightQueue {
       cancelIdleCallback(this._idleHandle);
       this._idleHandle = null;
     }
-  }
-}
-
-// requestIdleCallback polyfill (unavailable in some VS Code webviews)
-function requestIdleCallback(
-  cb: (deadline: { timeRemaining(): number; didTimeout: boolean }) => void,
-  opts?: { timeout: number },
-): number {
-  if (typeof window.requestIdleCallback === 'function') {
-    return window.requestIdleCallback(cb, opts);
-  }
-  return window.setTimeout(() => cb({ timeRemaining: () => 10, didTimeout: false }), 16);
-}
-
-function cancelIdleCallback(handle: number): void {
-  if (typeof window.cancelIdleCallback === 'function') {
-    window.cancelIdleCallback(handle);
-  } else {
-    clearTimeout(handle);
   }
 }

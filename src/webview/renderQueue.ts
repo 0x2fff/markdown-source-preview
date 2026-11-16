@@ -8,35 +8,16 @@
 import type { BlockStore } from './blockStore.js';
 
 interface QueueItem {
-  op: 'insert' | 'update';
   blockId: string;
   html: string;
-  hasTable: boolean;
   beforeId?: string | null;
   generation?: number;
   contentHash?: string;
   enqueuedAt?: number;
 }
 
-function countTableRows(html: string): number {
-  const body = /<tbody\b[^>]*>([\s\S]*?)<\/tbody>/i.exec(html)?.[1];
-  return body ? (body.match(/<tr\b/gi)?.length ?? 0) : 0;
-}
-
 const MAX_OPS_PER_CHUNK = 150; // hard cap per rAF
 const CHUNK_BUDGET_MS = 6; // stop applying ops once this much JS time elapsed
-const TABLE_CHUNK_BUDGET_MS = 6;
-
-interface TableQueueTelemetry {
-  tableChunkCount: number;
-  tableChunkLastMs: number;
-  tableChunkMaxMs: number;
-  tableChunkDurationsMs: number[];
-  pendingTableBlocks: number;
-  maxTableRows: number;
-}
-
-type TableQueueWindow = Window & { __MARKDOWN_SOURCE_PREVIEW_TABLE__?: TableQueueTelemetry };
 
 export class RenderQueue {
   private _queue: QueueItem[] = [];
@@ -46,12 +27,6 @@ export class RenderQueue {
   private _backgroundChunkLastMs = 0;
   private _backgroundChunkMaxMs = 0;
   private _urgentStartWaitMs = 0;
-  private _tableChunkCount = 0;
-  private _tableChunkLastMs = 0;
-  private _tableChunkMaxMs = 0;
-  private _tableChunkDurationsMs: number[] = [];
-  private _pendingTableBlocks = 0;
-  private _maxTableRows = 0;
   private _disposed = false;
 
   constructor(private readonly _store: BlockStore) {}
@@ -64,16 +39,9 @@ export class RenderQueue {
     contentHash?: string,
   ): void {
     if (this._disposed) return;
-    const hasTable = /<table\b/i.test(html);
-    if (hasTable) {
-      this._pendingTableBlocks++;
-      this._maxTableRows = Math.max(this._maxTableRows, countTableRows(html));
-    }
     this._queue.push({
-      op: 'insert',
       blockId,
       html,
-      hasTable,
       beforeId,
       generation,
       contentHash,
@@ -90,11 +58,7 @@ export class RenderQueue {
     // If an insert is still queued, replace its HTML to preserve order
     for (const item of this._queue) {
       if (item.blockId === blockId) {
-        const hadTable = item.hasTable;
         item.html = html;
-        item.hasTable = /<table\b/i.test(html);
-        this._pendingTableBlocks += Number(item.hasTable) - Number(hadTable);
-        if (item.hasTable) this._maxTableRows = Math.max(this._maxTableRows, countTableRows(html));
         if (generation !== undefined) item.generation = generation;
         if (contentHash) item.contentHash = contentHash;
         return;
@@ -103,7 +67,6 @@ export class RenderQueue {
     for (const item of this._urgent) {
       if (item.blockId === blockId) {
         item.html = html;
-        item.hasTable = /<table\b/i.test(html);
         if (generation !== undefined) item.generation = generation;
         if (contentHash) item.contentHash = contentHash;
         return;
@@ -111,10 +74,8 @@ export class RenderQueue {
     }
     // Do not queue edits for already-rendered blocks behind initial rest inserts
     this._urgent.push({
-      op: 'update',
       blockId,
       html,
-      hasTable: /<table\b/i.test(html),
       generation,
       contentHash,
       enqueuedAt: performance.now(),
@@ -123,11 +84,7 @@ export class RenderQueue {
 
   /** Drops pending insert/update ops ahead of a delete. */
   dequeue(blockId: string): void {
-    this._queue = this._queue.filter(item => {
-      if (item.blockId !== blockId) return true;
-      if (item.hasTable) this._pendingTableBlocks--;
-      return false;
-    });
+    this._queue = this._queue.filter(item => item.blockId !== blockId);
     this._urgent = this._urgent.filter(item => item.blockId !== blockId);
   }
 
@@ -155,19 +112,13 @@ export class RenderQueue {
     // inserts in the same task; resume the background queue on the next
     // rAF so the edited block paints first.
     const chunkStarted = performance.now();
-    const tableChunkStarted = performance.now();
-    const hasTableWork = !hadUrgent && this._queue.some(item => item.hasTable);
     let processed = 0;
     while (!hadUrgent && this._queue.length > 0 && processed < MAX_OPS_PER_CHUNK) {
       const elapsed = performance.now() - chunkStarted;
-      if (processed > 0 && (elapsed >= CHUNK_BUDGET_MS
-        || (hasTableWork && elapsed >= TABLE_CHUNK_BUDGET_MS))) {
-        break;
-      }
+      if (processed > 0 && elapsed >= CHUNK_BUDGET_MS) break;
       const item = this._queue.shift();
       if (!item) break;
       this._store.upsert(item.blockId, item.html, item.beforeId, item.generation, item.contentHash);
-      if (item.hasTable) this._pendingTableBlocks--;
       processed++;
     }
 
@@ -175,21 +126,6 @@ export class RenderQueue {
       this._backgroundChunkLastMs = +(performance.now() - chunkStarted).toFixed(3);
       this._backgroundChunkMaxMs = Math.max(this._backgroundChunkMaxMs, this._backgroundChunkLastMs);
       this._backgroundChunkCount++;
-    }
-    if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && hasTableWork && processed > 0) {
-      this._tableChunkLastMs = +(performance.now() - tableChunkStarted).toFixed(3);
-      this._tableChunkMaxMs = Math.max(this._tableChunkMaxMs, this._tableChunkLastMs);
-      this._tableChunkCount++;
-      this._tableChunkDurationsMs.push(this._tableChunkLastMs);
-      if (this._tableChunkDurationsMs.length > 1000) this._tableChunkDurationsMs.shift();
-      (window as TableQueueWindow).__MARKDOWN_SOURCE_PREVIEW_TABLE__ = {
-        tableChunkCount: this._tableChunkCount,
-        tableChunkLastMs: this._tableChunkLastMs,
-        tableChunkMaxMs: this._tableChunkMaxMs,
-        tableChunkDurationsMs: [...this._tableChunkDurationsMs],
-        pendingTableBlocks: this._pendingTableBlocks,
-        maxTableRows: this._maxTableRows,
-      };
     }
 
     if (this._queue.length > 0) {
@@ -205,7 +141,6 @@ export class RenderQueue {
   clear(): void {
     this._queue = [];
     this._urgent = [];
-    this._pendingTableBlocks = 0;
     if (this._rafHandle !== null) {
       cancelAnimationFrame(this._rafHandle);
       this._rafHandle = null;

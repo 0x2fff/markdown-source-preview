@@ -1,44 +1,9 @@
+import type { Env, MarkdownIt, RendererRule, Token } from 'markdown-it';
 import type { RenderBlock, BlockKind, ParsedDocument } from './renderModel.js';
 
-interface MarkdownToken {
-  type: string;
-  nesting: number;
-  map: [number, number] | null;
-  info?: string;
-  content?: string;
-  attrGet(name: string): string | null;
-  attrSet(name: string, value: string): void;
-}
-
-interface RenderEnvironment {
+type RenderEnvironment = Env & {
   resolveImage?: (src: string) => string | null;
-}
-
-type RendererRule = (
-  tokens: MarkdownToken[],
-  index: number,
-  options: unknown,
-  env: RenderEnvironment,
-  renderer: MarkdownRenderer,
-) => string;
-
-interface MarkdownRenderer {
-  rules: Record<string, RendererRule | undefined>;
-  render(tokens: MarkdownToken[], options: unknown, env: RenderEnvironment): string;
-  renderToken(tokens: MarkdownToken[], index: number, options: unknown): string;
-}
-
-interface MarkdownItLike {
-  options: unknown;
-  renderer: MarkdownRenderer;
-  linkify: { set(options: { fuzzyLink: boolean }): void };
-  parse(source: string, env: RenderEnvironment): MarkdownToken[];
-  use(plugin: unknown, options: unknown): MarkdownItLike;
-}
-
-interface MarkdownItConstructor {
-  new(options: unknown): MarkdownItLike;
-}
+};
 
 // FNV-1a 32-bit hash
 
@@ -51,12 +16,12 @@ function hashString(s: string): string {
   return h.toString(16).padStart(8, '0');
 }
 
-let _md: MarkdownItLike | null = null;
+let _md: MarkdownIt | null = null;
 
-function getMd(): MarkdownItLike {
+function getMd(): MarkdownIt {
   if (_md) return _md;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const MarkdownIt = require('markdown-it') as MarkdownItConstructor;
+  const MarkdownIt = require('markdown-it') as typeof import('markdown-it').default;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const taskLists = require('markdown-it-task-lists');
   _md = new MarkdownIt({
@@ -69,20 +34,14 @@ function getMd(): MarkdownItLike {
   // restore the previous autolink behavior explicitly.
   _md.linkify.set({ fuzzyLink: true });
 
-  const defaultImageRule = _md.renderer.rules.image
-    ?? ((tokens: MarkdownToken[], index: number, options: unknown, _env: unknown, self: MarkdownRenderer) =>
-      self.renderToken(tokens, index, options));
-  _md.renderer.rules.image = (
-    tokens: MarkdownToken[],
-    index: number,
-    options: unknown,
-    env: { resolveImage?: (src: string) => string | null },
-    self: MarkdownRenderer,
-  ) => {
+  const defaultImageRule: RendererRule = _md.renderer.rules.image
+    ?? ((tokens, index, options, _env, self) => self.renderToken(tokens, index, options));
+  _md.renderer.rules.image = (tokens, index, options, env, self) => {
     const token = tokens[index];
     const src = token.attrGet('src');
-    if (src && env.resolveImage) {
-      const resolved = env.resolveImage(src);
+    const resolveImage = (env as RenderEnvironment | undefined)?.resolveImage;
+    if (typeof src === 'string' && resolveImage) {
+      const resolved = resolveImage(src);
       if (!resolved) return '';
       token.attrSet('src', resolved);
     }
@@ -102,7 +61,7 @@ export function slugifyHeading(text: string): string {
 }
 
 
-function inferKind(token: MarkdownToken): BlockKind {
+function inferKind(token: Token): BlockKind {
   const type: string = token.type;
   if (type === 'heading_open') return 'heading';
   if (type === 'fence') {
@@ -153,6 +112,31 @@ function escHtmlText(s: string): string {
     .replace(/>/g, '&gt;');
 }
 
+/** Attribute-escapes a value for use inside a double-quoted HTML attribute. */
+export function escAttr(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+function emitBlock(
+  blocks: RenderBlock[],
+  kind: BlockKind,
+  sourceStart: number,
+  sourceEnd: number,
+  sourceText: string,
+  html: string,
+  id = `tmp:${blocks.length}`,
+): void {
+  blocks.push({
+    id,
+    kind,
+    sourceStart,
+    sourceEnd,
+    contentHash: hashString(sourceText),
+    html,
+    renderState: 'rendered',
+  });
+}
+
 /** Collapsible frontmatter HTML, closed by default like other Markdown previews. */
 function renderFrontmatterHtml(bodyLines: string[]): string {
   const body = escHtmlText(bodyLines.join('\n'));
@@ -186,7 +170,7 @@ export function parseDocument(source: string, opts: ParseOptions): ParsedDocumen
     parseSource = masked.join('\n');
   }
 
-  const tokens: MarkdownToken[] = md.parse(parseSource, {});
+  const tokens: Token[] = md.parse(parseSource, {});
   const parseMs = Date.now() - tParse;
   const headingSlugs = new Map<string, number>();
   for (let tokenIndex = 0; tokenIndex < tokens.length; tokenIndex++) {
@@ -202,7 +186,7 @@ export function parseDocument(source: string, opts: ParseOptions): ParsedDocumen
   const reuseHtml = new Map<string, string>();
   if (opts.reuse) {
     for (const block of opts.reuse) {
-      const signature = `${block.kind}:${block.contentHash}`;
+      const signature = blockSignature(block);
       if (!reuseHtml.has(signature)) reuseHtml.set(signature, block.html);
     }
   }
@@ -227,23 +211,14 @@ export function parseDocument(source: string, opts: ParseOptions): ParsedDocumen
         const html = reuseHtml.get(`${kind}:${contentHash}`)
           ?? md.renderer.render(blockTokens, md.options, { resolveImage: opts.resolveImage });
 
-        blocks.push({
-          id: `tmp:${blocks.length}`,
-          kind,
-          sourceStart: srcStart,
-          sourceEnd: srcEnd,
-          contentHash,
-          html,
-          renderState: 'rendered',
-          estimatedHeight: -1,
-        });
+        emitBlock(blocks, kind, srcStart, srcEnd, sourceText, html);
         i++;
         continue;
       }
 
       // Open tokens (heading_open, table_open, ...)
       if (t.nesting === 1) {
-        const groupTokens: MarkdownToken[] = [t];
+        const groupTokens: Token[] = [t];
         const srcStart = t.map ? t.map[0] : (blocks.length > 0 ? blocks[blocks.length - 1].sourceEnd : 0);
         depth = 1;
         i++;
@@ -267,16 +242,7 @@ export function parseDocument(source: string, opts: ParseOptions): ParsedDocumen
         const html = reuseHtml.get(`${kind}:${contentHash}`)
           ?? md.renderer.render(groupTokens, md.options, { resolveImage: opts.resolveImage });
 
-        blocks.push({
-          id: `tmp:${blocks.length}`,
-          kind,
-          sourceStart: srcStart,
-          sourceEnd: srcEnd,
-          contentHash,
-          html,
-          renderState: 'rendered',
-          estimatedHeight: -1,
-        });
+        emitBlock(blocks, kind, srcStart, srcEnd, sourceText, html);
         depth = 0;
         continue;
       }
@@ -296,7 +262,6 @@ export function parseDocument(source: string, opts: ParseOptions): ParsedDocumen
       contentHash: hashString(fmText),
       html: renderFrontmatterHtml(lines.slice(1, frontmatterEnd - 1)),
       renderState: 'rendered',
-      estimatedHeight: -1,
     });
   }
 
@@ -345,11 +310,8 @@ export function sliceInitial(
     }
   }
 
-  // Always include at least one block
-  if (cutIdx === 0 && doc.blocks.length > 0) cutIdx = 1;
-
-  const initialBlocks = doc.blocks.slice(0, cutIdx) as RenderBlock[];
-  const restBlocks = doc.blocks.slice(cutIdx) as RenderBlock[];
+  const initialBlocks = doc.blocks.slice(0, cutIdx);
+  const restBlocks = doc.blocks.slice(cutIdx);
   const initialHtml = initialBlocks.map(b => wrapBlock(b)).join('\n');
   const renderMs = Date.now() - tRender;
 
@@ -361,16 +323,10 @@ export function wrapBlock(block: RenderBlock): string {
   return `<div data-block-id="${escAttr(block.id)}" data-line="${block.sourceStart}" data-kind="${block.kind}" data-state="${block.renderState}">${block.html}</div>`;
 }
 
-function escAttr(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-}
-
-
+/** Inclusive source-line ranges of the changed region, before and after the edit. */
 export interface BlockWindow {
-  prevStartLine: number;
-  prevEndLine: number;
-  nextStartLine: number;
-  nextEndLine: number;
+  prev: readonly [number, number];
+  next: readonly [number, number];
 }
 
 function blockSignature(block: RenderBlock): string {
@@ -457,10 +413,10 @@ export function stabilizeBlockIds(
   const usedPrev: boolean[] = new Array(prev.length).fill(false);
 
   const prevHot = window
-    ? lineWindowToBlockRange(prev, window.prevStartLine, window.prevEndLine) ?? [0, prev.length - 1] as [number, number]
+    ? lineWindowToBlockRange(prev, window.prev[0], window.prev[1]) ?? [0, prev.length - 1] as [number, number]
     : [0, prev.length - 1] as [number, number];
   const nextHot = window
-    ? lineWindowToBlockRange(next, window.nextStartLine, window.nextEndLine) ?? [0, next.length - 1] as [number, number]
+    ? lineWindowToBlockRange(next, window.next[0], window.next[1]) ?? [0, next.length - 1] as [number, number]
     : [0, next.length - 1] as [number, number];
 
   const prevHotFirst = prevHot[0];

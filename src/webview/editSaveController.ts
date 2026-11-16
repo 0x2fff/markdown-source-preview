@@ -1,6 +1,5 @@
 export interface PendingSave {
   blockId: string;
-  at: number;
   noOp: boolean;
 }
 
@@ -15,7 +14,7 @@ export class EditSaveController {
   }
 
   beginSave(blockId: string, noOp: boolean): void {
-    this.pending = { blockId, at: performance.now(), noOp };
+    this.pending = { blockId, noOp };
   }
 
   isNoOpSave(blockId: string): boolean {

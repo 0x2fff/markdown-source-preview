@@ -5,8 +5,13 @@
  */
 
 import mermaidPackage from 'mermaid/package.json';
-import { MERMAID_SECURITY_LEVEL, mermaidSvgCacheKey } from './mermaidSecurity.js';
-import { MERMAID_MINDMAP_THEME_CSS, mermaidPalette } from './mermaidTheme.js';
+import {
+  MERMAID_MINDMAP_THEME_CSS,
+  MERMAID_SECURITY_LEVEL,
+  mermaidPalette,
+  mermaidSvgCacheKey,
+} from './mermaidTheme.js';
+import { cancelIdleCallback, requestIdleCallback } from './idleCallback.js';
 
 const RENDER_AHEAD_PX = 1200;
 const MAX_CONCURRENT = 2;
@@ -184,14 +189,18 @@ export class MermaidQueue {
     };
   }
 
-  private _observeExisting(root: HTMLElement): void {
+  private _scan(scope: ParentNode): void {
     const themeKey = this._theme().key;
-    for (const code of root.querySelectorAll<HTMLElement>('pre > code.language-mermaid')) {
+    for (const code of scope.querySelectorAll<HTMLElement>('pre > code.language-mermaid')) {
       this._observeDiagram(code, undefined, themeKey);
     }
-    for (const output of root.querySelectorAll<HTMLElement>('[data-mermaid="true"]')) {
+    for (const output of scope.querySelectorAll<HTMLElement>('[data-mermaid="true"]')) {
       this._refreshOutput(output, themeKey);
     }
+  }
+
+  private _observeExisting(root: HTMLElement): void {
+    this._scan(root);
     // Theme attribute mutations do not trigger the childList observer, so
     // schedule a sweep explicitly: stale outputs that landed in
     // _pendingMargin during this pass get promoted on the next frame.
@@ -205,12 +214,7 @@ export class MermaidQueue {
     } else if (node.matches('[data-mermaid="true"]')) {
       this._refreshOutput(node, themeKey);
     }
-    for (const code of node.querySelectorAll<HTMLElement>('pre > code.language-mermaid')) {
-      this._observeDiagram(code, undefined, themeKey);
-    }
-    for (const output of node.querySelectorAll<HTMLElement>('[data-mermaid="true"]')) {
-      this._refreshOutput(output, themeKey);
-    }
+    this._scan(node);
   }
 
   private _refreshOutput(output: HTMLElement, themeKey: string): void {
@@ -460,7 +464,7 @@ export class MermaidQueue {
       if (__MARKDOWN_SOURCE_PREVIEW_LAB__ && telemetry && telemetry.firstRenderStartedEpochMs === null) {
         telemetry.firstRenderStartedEpochMs = Date.now();
       }
-      const theme = this._theme();
+      const theme = this._prepareRender(mermaid, source);
       const sourceHash = await sha256(source);
       if (this._disposed) return;
       const diagramType = mermaidDiagramType(source);
@@ -489,8 +493,6 @@ export class MermaidQueue {
           this._publishTelemetry();
           return;
         }
-        this._ensureInitialized(mermaid, theme);
-        if (source.includes('logos:')) ensureBuiltInIconPacks(mermaid);
         const renderId = `markdown-source-preview-mermaid-${++nextRenderId}`;
         const result = await mermaid.render(renderId, source);
         if (this._disposed || !this._root?.contains(element)) return;
@@ -558,9 +560,7 @@ export class MermaidQueue {
   async renderSource(source: string): Promise<{ svg: string }> {
     const mermaid = await this._loadMermaid();
     if (this._disposed) throw new Error('Mermaid queue disposed');
-    const theme = this._theme();
-    this._ensureInitialized(mermaid, theme);
-    if (source.includes('logos:')) ensureBuiltInIconPacks(mermaid);
+    this._prepareRender(mermaid, source);
     const renderId = `markdown-source-preview-mermaid-draft-${++nextRenderId}`;
     const result = await mermaid.render(renderId, source);
     return {
@@ -588,10 +588,14 @@ export class MermaidQueue {
     }
   }
 
-  private _ensureInitialized(api: MermaidApi, theme: MermaidTheme): void {
-    if (this._initializedThemeKey === theme.key) return;
-    api.initialize(theme.config);
-    this._initializedThemeKey = theme.key;
+  private _prepareRender(api: MermaidApi, source: string): MermaidTheme {
+    const theme = this._theme();
+    if (this._initializedThemeKey !== theme.key) {
+      api.initialize(theme.config);
+      this._initializedThemeKey = theme.key;
+    }
+    if (source.includes('logos:')) ensureBuiltInIconPacks(api);
+    return theme;
   }
 
   private _loadMermaid(): Promise<MermaidApi> {
@@ -657,19 +661,20 @@ export class MermaidQueue {
     return { key: JSON.stringify(themeVariables), config: themeConfig };
   }
 
-  private _isInViewport(element: HTMLElement): boolean {
+  private _intersectsViewport(element: HTMLElement, marginPx: number): boolean {
     const rect = element.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0
-      && rect.bottom > 0 && rect.right > 0
-      && rect.top < window.innerHeight && rect.left < window.innerWidth;
+      && rect.bottom > -marginPx && rect.right > 0
+      && rect.top < window.innerHeight + marginPx
+      && rect.left < window.innerWidth;
+  }
+
+  private _isInViewport(element: HTMLElement): boolean {
+    return this._intersectsViewport(element, 0);
   }
 
   private _isWithinRenderMargin(element: HTMLElement): boolean {
-    const rect = element.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0
-      && rect.bottom > -RENDER_AHEAD_PX && rect.right > 0
-      && rect.top < window.innerHeight + RENDER_AHEAD_PX
-      && rect.left < window.innerWidth;
+    return this._intersectsViewport(element, RENDER_AHEAD_PX);
   }
 
   private _publishTelemetry(): void {
@@ -731,22 +736,4 @@ async function sha256(value: string): Promise<string> {
   const bytes = new TextEncoder().encode(value);
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function requestIdleCallback(callback: IdleRequestCallback, options: IdleRequestOptions): number {
-  if (typeof window.requestIdleCallback === 'function') {
-    return window.requestIdleCallback(callback, options);
-  }
-  return window.setTimeout(
-    () => callback({ didTimeout: true, timeRemaining: () => 0 }),
-    Math.min(16, options.timeout ?? RENDER_IDLE_TIMEOUT_MS),
-  );
-}
-
-function cancelIdleCallback(handle: number): void {
-  if (typeof window.cancelIdleCallback === 'function') {
-    window.cancelIdleCallback(handle);
-  } else {
-    clearTimeout(handle);
-  }
 }

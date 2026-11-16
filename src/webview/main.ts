@@ -42,6 +42,10 @@ function postToHost(msg: WebviewToHost): void {
   vscode.postMessage(msg);
 }
 
+function afterTwoFrames(callback: () => void): void {
+  requestAnimationFrame(() => requestAnimationFrame(callback));
+}
+
 
 const root = document.getElementById('markdown-source-preview-root') as HTMLElement;
 
@@ -58,6 +62,22 @@ let _lastScrollSyncLine = -1;
 let _sourceScrollToken: string | undefined;
 const _receivedSourceScrollTokens = new Set<string>();
 let _editMode: 'read' | 'edit' | 'readonly' = 'read';
+
+function clearProgrammaticScroll(): void {
+  _sourceScrollToken = undefined;
+  _programmaticScrollLine = undefined;
+  if (_programmaticScrollTimer !== undefined) {
+    window.clearTimeout(_programmaticScrollTimer);
+    _programmaticScrollTimer = undefined;
+  }
+}
+
+/** Drops the active edit island and its background highlight layer. */
+function closeActiveEditor(): void {
+  _activeBlockEditor = undefined;
+  _activeCodeHighlight?.dispose();
+  _activeCodeHighlight = undefined;
+}
 
 interface ActiveBlockEditor {
   blockId: string;
@@ -228,7 +248,7 @@ root.addEventListener('click', event => {
     return;
   }
   event.preventDefault();
-  editMetrics.markBegin();
+  if (__MARKDOWN_SOURCE_PREVIEW_LAB__) editMetrics.markBegin();
   postToHost({ type: 'begin-edit', payload: { blockId } });
 }, { signal: lifecycleController.signal });
 
@@ -259,11 +279,7 @@ window.addEventListener('scroll', () => {
   const now = performance.now();
   if (_sourceScrollToken) {
     if (_programmaticScrollTimer !== undefined) window.clearTimeout(_programmaticScrollTimer);
-    _programmaticScrollTimer = window.setTimeout(() => {
-      _sourceScrollToken = undefined;
-      _programmaticScrollLine = undefined;
-      _programmaticScrollTimer = undefined;
-    }, 1000);
+    _programmaticScrollTimer = window.setTimeout(clearProgrammaticScroll, 1000);
     trace?.push(`suppressed token=${_sourceScrollToken} now=${now}`);
     return;
   }
@@ -290,14 +306,10 @@ window.addEventListener('scroll', () => {
   });
 }, { passive: true, signal: lifecycleController.signal });
 
-window.addEventListener('wheel', () => {
-  _sourceScrollToken = undefined;
- _programmaticScrollLine = undefined;
- if (_programmaticScrollTimer !== undefined) {
-   window.clearTimeout(_programmaticScrollTimer);
-   _programmaticScrollTimer = undefined;
- }
-}, { passive: true, signal: lifecycleController.signal });
+window.addEventListener('wheel', clearProgrammaticScroll, {
+  passive: true,
+  signal: lifecycleController.signal,
+});
 
 attachDiagramView(root, lifecycleController.signal);
 
@@ -325,6 +337,26 @@ function measureTextWidth(text: string, el: HTMLElement): number {
 }
 
 /**
+ * Resolves a source line inside the textarea, places the caret through
+ * `placeCaret`, then centers the textarea on that line.
+ */
+function positionTextareaAtLine(
+  textarea: HTMLTextAreaElement,
+  source: string,
+  requestedLine: number,
+  placeCaret: (line: string, lineStart: number) => void,
+): void {
+  const lines = source.split('\n');
+  const lineIndex = Math.min(lines.length - 1, Math.max(0, requestedLine));
+  let lineStart = 0;
+  for (let i = 0; i < lineIndex; i++) lineStart += lines[i].length + 1;
+  placeCaret(lines[lineIndex] ?? '', lineStart);
+  const cs = getComputedStyle(textarea);
+  const lineHeight = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2 || 20;
+  textarea.scrollTop = Math.max(0, lineIndex * lineHeight - textarea.clientHeight / 2);
+}
+
+/**
  * Maps a click position (normalized block coordinates) to a textarea
  * caret position and scroll offset. Line/column are render approximations.
  */
@@ -333,27 +365,23 @@ function applyBeginPoint(
   source: string,
   point: { x: number; y: number },
 ): void {
-  const lines = source.split('\n');
-  const lineIndex = Math.min(
-    lines.length - 1,
-    Math.max(0, Math.floor(point.y * lines.length)),
+  const lineCount = source.split('\n').length;
+  positionTextareaAtLine(
+    textarea,
+    source,
+    Math.floor(point.y * lineCount),
+    (line, lineStart) => {
+      // Approximate average glyph width from the first 400 chars of very long lines
+      const sample = line.slice(0, 400);
+      const sampleWidth = measureTextWidth(sample, textarea);
+      const charWidth = sampleWidth > 0 ? sampleWidth / Math.max(1, sample.length) : 0;
+      const column = charWidth > 0
+        ? Math.round((point.x * textarea.clientWidth) / charWidth)
+        : 0;
+      const caret = lineStart + Math.min(Math.max(column, 0), line.length);
+      textarea.setSelectionRange(caret, caret);
+    },
   );
-  let lineStart = 0;
-  for (let i = 0; i < lineIndex; i++) lineStart += lines[i].length + 1;
-  const line = lines[lineIndex] ?? '';
-  // Approximate average glyph width from the first 400 chars of very long lines
-  const sample = line.slice(0, 400);
-  const sampleWidth = measureTextWidth(sample, textarea);
-  const charWidth = sampleWidth > 0 ? sampleWidth / Math.max(1, sample.length) : 0;
-  const column = charWidth > 0
-    ? Math.round((point.x * textarea.clientWidth) / charWidth)
-    : 0;
-  const caret = lineStart + Math.min(Math.max(column, 0), line.length);
-  textarea.setSelectionRange(caret, caret);
-
-  const cs = getComputedStyle(textarea);
-  const lineHeight = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2 || 20;
-  textarea.scrollTop = Math.max(0, lineIndex * lineHeight - textarea.clientHeight / 2);
 }
 
 /**
@@ -464,19 +492,12 @@ function applyTableBeginPoint(
   source: string,
   target: TableBeginTarget,
 ): void {
-  const lines = source.split('\n');
-  const lineIndex = Math.min(lines.length - 1, Math.max(0, target.lineIndex));
-  let lineStart = 0;
-  for (let i = 0; i < lineIndex; i++) lineStart += lines[i].length + 1;
-  const line = lines[lineIndex] ?? '';
-  const caret = lineStart + tableCellCaretColumn(
-    line, target.cellIndex, target.cellX, target.rowX,
-  );
-  textarea.setSelectionRange(caret, caret);
-
-  const cs = getComputedStyle(textarea);
-  const lineHeight = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2 || 20;
-  textarea.scrollTop = Math.max(0, lineIndex * lineHeight - textarea.clientHeight / 2);
+  positionTextareaAtLine(textarea, source, target.lineIndex, (line, lineStart) => {
+    const caret = lineStart + tableCellCaretColumn(
+      line, target.cellIndex, target.cellX, target.rowX,
+    );
+    textarea.setSelectionRange(caret, caret);
+  });
 }
 
 function beginBlockEditor(blockId: string, source: string): void {
@@ -488,7 +509,7 @@ function beginBlockEditor(blockId: string, source: string): void {
     return;
   }
 
-  const beginAt = editMetrics.consumeBegin();
+  const beginAt = __MARKDOWN_SOURCE_PREVIEW_LAB__ ? editMetrics.consumeBegin() : undefined;
   // Fix the rendered height as the outer size. Long Markdown scrolls
   // inside the textarea so surrounding layout does not move while editing.
   const rect = element.getBoundingClientRect();
@@ -578,7 +599,9 @@ function beginBlockEditor(blockId: string, source: string): void {
     initialSource: source,
     commit: () => {
       if (_activeBlockEditor !== editor || editSave.hasPendingSave()) return;
-      editSave.beginSave(blockId, textarea.value === source);
+      const noOp = textarea.value === source;
+      editSave.beginSave(blockId, noOp);
+      if (__MARKDOWN_SOURCE_PREVIEW_LAB__) editMetrics.beginSave(blockId, noOp);
       postToHost({
         type: 'commit-edit',
         payload: { blockId, markdown: textarea.value },
@@ -596,7 +619,7 @@ function beginBlockEditor(blockId: string, source: string): void {
     payload: { blockId, markdown: textarea.value },
   });
   const cancel = () => {
-    editMetrics.markCancel();
+    if (__MARKDOWN_SOURCE_PREVIEW_LAB__) editMetrics.markCancel();
     postToHost({ type: 'cancel-edit', payload: { blockId } });
   };
 
@@ -604,10 +627,8 @@ function beginBlockEditor(blockId: string, source: string): void {
     const inputEvent = event as InputEvent;
     if (!inputEvent.isComposing && __MARKDOWN_SOURCE_PREVIEW_LAB__) {
       const inputMetric = editMetrics.consumeInput();
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          editMetrics.record(inputMetric.ime ? 'imeCommitMs' : 'asciiInputMs', performance.now() - inputMetric.startedAt);
-        });
+      afterTwoFrames(() => {
+        editMetrics.record(inputMetric.ime ? 'imeCommitMs' : 'asciiInputMs', performance.now() - inputMetric.startedAt);
       });
     }
     updateDraft();
@@ -651,7 +672,7 @@ function beginBlockEditor(blockId: string, source: string): void {
         data: '    ',
       }));
     } else if (!event.metaKey && !event.ctrlKey && !event.altKey && event.key.length === 1) {
-      editMetrics.markKeyInput();
+      if (__MARKDOWN_SOURCE_PREVIEW_LAB__) editMetrics.markKeyInput();
     }
   }, { signal: lifecycleController.signal });
   textarea.addEventListener('blur', () => {
@@ -659,11 +680,11 @@ function beginBlockEditor(blockId: string, source: string): void {
     if (_activeBlockEditor === editor) editor.commit();
   }, { signal: lifecycleController.signal });
   textarea.addEventListener('compositionstart', () => {
-    editMetrics.compositionStart();
+    if (__MARKDOWN_SOURCE_PREVIEW_LAB__) editMetrics.compositionStart();
     if (codeEditorWrap) codeEditorWrap.dataset.composing = 'true';
   }, { signal: lifecycleController.signal });
   textarea.addEventListener('compositionend', () => {
-    editMetrics.compositionEnd();
+    if (__MARKDOWN_SOURCE_PREVIEW_LAB__) editMetrics.compositionEnd();
     if (codeEditorWrap) delete codeEditorWrap.dataset.composing;
     _activeCodeHighlight?.schedule(textarea.value);
   }, { signal: lifecycleController.signal });
@@ -691,10 +712,8 @@ function beginBlockEditor(blockId: string, source: string): void {
   }
 
   if (beginAt !== undefined && __MARKDOWN_SOURCE_PREVIEW_LAB__) {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        editMetrics.record('islandStartMs', performance.now() - beginAt);
-      });
+    afterTwoFrames(() => {
+      editMetrics.record('islandStartMs', performance.now() - beginAt);
     });
   }
 }
@@ -768,9 +787,7 @@ function startMermaidDraftPreview(
 function finishBlockEditor(blockId: string, outcome: 'saved' | 'discarded'): void {
   const editor = _activeBlockEditor;
   if (!editor || editor.blockId !== blockId) return;
-  _activeBlockEditor = undefined;
-  _activeCodeHighlight?.dispose();
-  _activeCodeHighlight = undefined;
+  closeActiveEditor();
   const pendingBegin = outcome === 'saved' ? _pendingBeginBlockId : undefined;
   _pendingBeginBlockId = undefined;
   const noOpSave = outcome === 'saved' && editSave.isNoOpSave(blockId);
@@ -788,14 +805,15 @@ function finishBlockEditor(blockId: string, outcome: 'saved' | 'discarded'): voi
   }
 
   if (outcome === 'saved') {
-    editMetrics.finishSave(editSave.consumeSave(blockId));
+    editSave.consumeSave(blockId);
+    if (__MARKDOWN_SOURCE_PREVIEW_LAB__) editMetrics.finishSave(blockId);
   } else {
     editSave.clearSave();
-    editMetrics.finishCancel();
+    if (__MARKDOWN_SOURCE_PREVIEW_LAB__) editMetrics.finishCancel();
   }
 
   if (pendingBegin !== undefined) {
-    editMetrics.markBegin();
+    if (__MARKDOWN_SOURCE_PREVIEW_LAB__) editMetrics.markBegin();
     postToHost({ type: 'begin-edit', payload: { blockId: pendingBegin } });
   }
 }
@@ -827,9 +845,7 @@ function releaseBlockEditHeight(element: HTMLElement): void {
 function refreshBlock(blockId: string, html: string): void {
   const editor = _activeBlockEditor;
   if (editor?.blockId === blockId) {
-    _activeBlockEditor = undefined;
-    _activeCodeHighlight?.dispose();
-    _activeCodeHighlight = undefined;
+    closeActiveEditor();
     if (editor.element.isConnected) {
       editor.element.innerHTML = editor.originalHtml;
     }
@@ -872,20 +888,18 @@ function handleInit(payload: InitPayload): void {
 
   // Initial HTML may already be embedded in body or arrive via
   // postMessage; measure the initial-display milestone here
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      const ms = performance.now() - _bootMs;
-      Instrumentation.emit('first-paint-2raf', ms, {
-        generation: payload.generation,
-        initialBlocks: payload.initialBlockCount,
-        totalBlocks: payload.totalBlockCount,
-        parseMs: payload.parseMs,
-        renderMs: payload.renderMs,
-      });
-      if (__MARKDOWN_SOURCE_PREVIEW_LAB__) {
-        postToHost({ type: 'diagnostic', payload: { event: 'first-paint-2raf', ms } });
-      }
+  afterTwoFrames(() => {
+    const ms = performance.now() - _bootMs;
+    Instrumentation.emit('first-paint-2raf', ms, {
+      generation: payload.generation,
+      initialBlocks: payload.initialBlockCount,
+      totalBlocks: payload.totalBlockCount,
+      parseMs: payload.parseMs,
+      renderMs: payload.renderMs,
     });
+    if (__MARKDOWN_SOURCE_PREVIEW_LAB__) {
+      postToHost({ type: 'diagnostic', payload: { event: 'first-paint-2raf', ms } });
+    }
   });
 
   highlightQueue.attach(root);
@@ -915,9 +929,7 @@ function handlePatch(payload: PatchPayload): void {
     // Close the island only when the block itself disappears. For other
     // external changes keep the draft; the host re-verifies version/hash
     // on save.
-    _activeBlockEditor = undefined;
-    _activeCodeHighlight?.dispose();
-    _activeCodeHighlight = undefined;
+    closeActiveEditor();
     _pendingBeginBlockId = undefined;
   }
 
@@ -954,7 +966,9 @@ function handlePatch(payload: PatchPayload): void {
   // flush applies only CHUNK_SIZE items to the DOM synchronously
   renderQueue.flush();
 
-  editMetrics.patchApplied(changedBlockIds.length > 0);
+  if (__MARKDOWN_SOURCE_PREVIEW_LAB__) {
+    editMetrics.patchApplied(changedBlockIds.length > 0);
+  }
 
   // domApplyMs: synchronous time from message receipt to flush
   // completion. Remaining rest blocks continue on later rAFs, but
@@ -1019,33 +1033,7 @@ function handleDiagnostic(payload: DiagnosticPayload): void {
   if (payload.event === 'ack-record' && payload.extra) {
     // Write host-computed patchAckMs / hostPrepareMs to window;
     // diagnostics read this via frame.evaluate().
-    const ack = {
-      generation: payload.extra['generation'],
-      hostPrepareMs: payload.extra['hostPrepareMs'],
-      getTextMs: payload.extra['getTextMs'],
-      parseMs: payload.extra['parseMs'],
-      buildBlocksMs: payload.extra['buildBlocksMs'],
-      diffMs: payload.extra['diffMs'],
-      serializeEstimateMs: payload.extra['serializeEstimateMs'],
-      patchAckMs: payload.extra['patchAckMs'],
-      domApplyMs: payload.extra['domApplyMs'],
-      changedBlockCount: payload.extra['changedBlockCount'],
-      messageBytes: payload.extra['messageBytes'],
-      blockIds: payload.extra['blockIds'],
-      hostChangeReceivedEpochMs: payload.extra['hostChangeReceivedEpochMs'],
-      debounceMs: payload.extra['debounceMs'],
-      hostPatchSentEpochMs: payload.extra['hostPatchSentEpochMs'],
-      hostAckReceivedEpochMs: payload.extra['hostAckReceivedEpochMs'],
-      hostToWebviewReceiveMs: payload.extra['hostToWebviewReceiveMs'],
-      webviewQueueWaitMs: payload.extra['webviewQueueWaitMs'],
-      webviewToHostAckMs: payload.extra['webviewToHostAckMs'],
-      backgroundChunkLastMs: payload.extra['backgroundChunkLastMs'],
-      backgroundChunkMaxMs: payload.extra['backgroundChunkMaxMs'],
-      backgroundChunkCount: payload.extra['backgroundChunkCount'],
-      queueLengthAtReceive: payload.extra['queueLengthAtReceive'],
-      urgentQueueLengthAtReceive: payload.extra['urgentQueueLengthAtReceive'],
-      urgentStartWaitMs: payload.extra['urgentStartWaitMs'],
-    };
+    const ack = { ...payload.extra };
     (window as any).__MARKDOWN_SOURCE_PREVIEW_ACKS__ ??= {};
     (window as any).__MARKDOWN_SOURCE_PREVIEW_ACKS__[String(ack.generation)] = ack;
     (window as any).__MARKDOWN_SOURCE_PREVIEW_LAST_ACK__ = ack;
@@ -1072,11 +1060,7 @@ function scrollToLine(payload: ScrollPayload): void {
     _sourceScrollToken = payload.token;
     _programmaticScrollLine = Number(el.dataset.line);
     el.scrollIntoView({ block: 'start', behavior: 'auto' });
-    _programmaticScrollTimer = window.setTimeout(() => {
-      _sourceScrollToken = undefined;
-      _programmaticScrollLine = undefined;
-      _programmaticScrollTimer = undefined;
-    }, 1000);
+    _programmaticScrollTimer = window.setTimeout(clearProgrammaticScroll, 1000);
   }
 }
 
@@ -1116,10 +1100,7 @@ function disposeWebview(): WebviewCleanupSnapshot {
   longTaskObserver?.disconnect();
   longTaskObserver = null;
   disposeInstrumentation();
-  if (_programmaticScrollTimer !== undefined) {
-    window.clearTimeout(_programmaticScrollTimer);
-    _programmaticScrollTimer = undefined;
-  }
+  clearProgrammaticScroll();
   const renderCleanup = renderQueue.cleanupState;
   const highlightCleanup = highlightQueue.cleanupState;
   const mermaidCleanup = mermaidQueue.cleanupState;

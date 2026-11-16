@@ -14,10 +14,6 @@ export class BlockStore {
     }
   }
 
-  has(blockId: string): boolean {
-    return this._idToEl.has(blockId);
-  }
-
   get(blockId: string): HTMLElement | undefined {
     return this._idToEl.get(blockId);
   }
@@ -39,8 +35,7 @@ export class BlockStore {
       // outerHTML replaces the element, so it must be re-fetched
       const newEl = this._root.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(blockId)}"]`);
       if (newEl) {
-        if (generation !== undefined) newEl.dataset.generation = String(generation);
-        if (contentHash) newEl.dataset.contentHash = contentHash;
+        this._setMetadata(newEl, generation, contentHash);
         this._idToEl.set(blockId, newEl);
       }
       return newEl;
@@ -52,8 +47,7 @@ export class BlockStore {
     const newEl = temp.content.firstElementChild as HTMLElement | null;
     if (!newEl) return null;
 
-    if (generation !== undefined) newEl.dataset.generation = String(generation);
-    if (contentHash) newEl.dataset.contentHash = contentHash;
+    this._setMetadata(newEl, generation, contentHash);
 
     if (beforeId) {
       const beforeEl = this._idToEl.get(beforeId);
@@ -77,17 +71,8 @@ export class BlockStore {
     }
   }
 
-  blockIds(): string[] {
-    const ids: string[] = [];
-    const els = this._root.querySelectorAll<HTMLElement>('[data-block-id]');
-    for (const el of els) {
-      const id = el.dataset.blockId;
-      if (id) ids.push(id);
-    }
-    return ids;
-  }
-
-  get size(): number {
-    return this._idToEl.size;
+  private _setMetadata(el: HTMLElement, generation?: number, contentHash?: string): void {
+    if (generation !== undefined) el.dataset.generation = String(generation);
+    if (contentHash) el.dataset.contentHash = contentHash;
   }
 }

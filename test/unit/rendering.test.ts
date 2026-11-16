@@ -7,7 +7,7 @@ import type { BlockStore } from '../../src/webview/blockStore.js';
 import {
   MERMAID_SECURITY_LEVEL,
   mermaidSvgCacheKey,
-} from '../../src/webview/mermaidSecurity.js';
+} from '../../src/webview/mermaidTheme.js';
 
 const commonMarkExamples = (require('commonmark-spec') as {
   tests: Array<{ markdown: string; html: string; section: string; number: number }>;

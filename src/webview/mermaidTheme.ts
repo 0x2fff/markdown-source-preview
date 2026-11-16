@@ -4,94 +4,7 @@
  * these constants cover categorical, note, git-graph, gantt, and pie roles.
  */
 
-export interface MermaidPalette {
-  primaryColor: string;
-  primaryTextColor: string;
-  primaryBorderColor: string;
-  secondaryColor: string;
-  secondaryTextColor: string;
-  secondaryBorderColor: string;
-  tertiaryColor: string;
-  tertiaryTextColor: string;
-  tertiaryBorderColor: string;
-  lineColor: string;
-  arrowheadColor: string;
-  textColor: string;
-  mainBkg: string;
-  nodeBorder: string;
-  clusterBkg: string;
-  clusterBorder: string;
-  titleColor: string;
-  edgeLabelBackground: string;
-  noteBkgColor: string;
-  noteTextColor: string;
-  noteBorderColor: string;
-  actorBkg: string;
-  actorBorder: string;
-  actorTextColor: string;
-  actorLineColor: string;
-  signalColor: string;
-  signalTextColor: string;
-  labelBoxBkgColor: string;
-  labelBoxBorderColor: string;
-  labelTextColor: string;
-  loopTextColor: string;
-  activationBkgColor: string;
-  activationBorderColor: string;
-  sequenceNumberColor: string;
-  git0: string;
-  git1: string;
-  git2: string;
-  git3: string;
-  git4: string;
-  taskBkgColor: string;
-  taskTextColor: string;
-  taskTextOutsideColor: string;
-  activeTaskBkgColor: string;
-  doneTaskBkgColor: string;
-  critBkgColor: string;
-  critBorderColor: string;
-  sectionBkgColor: string;
-  altSectionBkgColor: string;
-  gridColor: string;
-  todayLineColor: string;
-  cScale0: string;
-  cScale1: string;
-  cScale2: string;
-  cScale3: string;
-  cScale4: string;
-  cScale5: string;
-  cScale6: string;
-  cScale7: string;
-  cScale8: string;
-  cScale9: string;
-  pieSectionTextColor: string;
-  pieTitleTextColor: string;
-  pieOuterStrokeColor: string;
-  pie1: string; pie2: string; pie3: string; pie4: string;
-  pie5: string; pie6: string; pie7: string; pie8: string;
-  pie9: string; pie10: string; pie11: string; pie12: string;
-  requirementBackground: string;
-  requirementBorderColor: string;
-  requirementTextColor: string;
-  relationColor: string;
-  relationLabelBackground: string;
-  relationLabelColor: string;
-  classText: string;
-  stateBkg: string;
-  stateBorder: string;
-  stateLabelColor: string;
-  transitionColor: string;
-  transitionLabelColor: string;
-  altBackground: string;
-  compositeBackground: string;
-  compositeTitleBackground: string;
-  innerEndBackground: string;
-  specialStateColor: string;
-  labelBackgroundColor: string;
-}
-
-export const MERMAID_LIGHT_PALETTE: MermaidPalette = {
+export const MERMAID_LIGHT_PALETTE: Record<string, string> = {
   primaryColor: '#ddf4ff',
   primaryTextColor: '#1f2328',
   primaryBorderColor: '#0969da',
@@ -178,7 +91,7 @@ export const MERMAID_LIGHT_PALETTE: MermaidPalette = {
   labelBackgroundColor: '#ffffff',
 };
 
-export const MERMAID_DARK_PALETTE: MermaidPalette = {
+export const MERMAID_DARK_PALETTE: Record<string, string> = {
   primaryColor: '#1f6feb',
   primaryTextColor: '#f0f6fc',
   primaryBorderColor: '#58a6ff',
@@ -282,6 +195,17 @@ export const MERMAID_MINDMAP_THEME_CSS = `
 }
 `;
 
-export function mermaidPalette(scheme: MermaidScheme): MermaidPalette {
+export function mermaidPalette(scheme: MermaidScheme): Record<string, string> {
   return scheme === 'dark' ? MERMAID_DARK_PALETTE : MERMAID_LIGHT_PALETTE;
+}
+
+export const MERMAID_SECURITY_LEVEL = 'strict';
+
+export function mermaidSvgCacheKey(
+  version: string,
+  securityLevel: string,
+  themeKey: string,
+  sourceHash: string,
+): string {
+  return `${version}::${securityLevel}::${themeKey}::${sourceHash}`;
 }

@@ -61,24 +61,16 @@ export async function detectReadonly(
     return { readonly: true, reason: 'unsupported-scheme' };
   }
 
-  // 1. Try VS Code permission info
+  // 1. VS Code permission info (may be absent on macOS)
   let vscodePerm: number | undefined;
   try {
-    const wsStat = await vscode.workspace.fs.stat(uri);
-    vscodePerm = wsStat.permissions;
-    // Return immediately when FilePermission.Readonly is set
-    if (
-      vscodePerm !== undefined &&
-      (vscodePerm & vscode.FilePermission.Readonly) !== 0
-    ) {
-      return { readonly: true, reason: 'vscode-file-permission' };
-    }
-  } catch (err) {
+    vscodePerm = (await vscode.workspace.fs.stat(uri)).permissions;
+  } catch {
     // Stat failure (deleted file, permission error, ...) → treat as read-only
     return { readonly: true, reason: 'stat-failed' };
   }
 
-  // 2. Confirm via POSIX mode (macOS may omit permissions in fs.stat)
+  // 2. Confirm via POSIX mode
   try {
     const posix = await fsStat(uri.fsPath);
     return readonlyFromPermissions(vscodePerm, posix.mode);

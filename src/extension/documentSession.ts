@@ -19,6 +19,7 @@ import type {
   HostToWebview,
   BlockPatch,
   PatchHostTimings,
+  RenderBlock,
 } from '../core/renderModel.js';
 
 export interface SessionConfig {
@@ -30,19 +31,8 @@ export interface DocumentRenderOptions {
   resolveImage?: (src: string) => string | null;
 }
 
-export interface UpdateTimings {
-  /** Total of getText + parse + buildBlocks + diff + serialize (ms). */
-  hostPrepareMs: number;
-  getTextMs: number;
-  parseMs: number;
-  buildBlocksMs: number;
-  diffMs: number;
-  serializeEstimateMs: number;
+export interface UpdateTimings extends PatchHostTimings {
   postMessageMs: number;
-  changedBlockCount: number;
-  insertedBlockCount: number;
-  deletedBlockCount: number;
-  messageBytes: number;
   updateMode: 'windowed-fullparse' | 'full-reparse';
   fallbackReason: string | null;
   changeStartLine: number | null;
@@ -88,10 +78,8 @@ function windowFromContentChanges(
 
   return {
     window: {
-      prevStartLine: prevStart,
-      prevEndLine: prevEnd,
-      nextStartLine: nextStart,
-      nextEndLine: nextEnd,
+      prev: [prevStart, prevEnd],
+      next: [nextStart, nextEnd],
     },
     startLine: prevStart,
     endLine: prevEnd,
@@ -107,7 +95,6 @@ function patchesFromDiff(
       op: 'insert' as const,
       blockId: block.id,
       html: wrapBlock(block),
-      renderState: block.renderState,
       contentHash: block.contentHash,
     }));
     return { patches, inserted: patches.length, deleted: 0 };
@@ -119,7 +106,6 @@ function patchesFromDiff(
       op: 'update' as const,
       blockId: block.id,
       html: wrapBlock(block),
-      renderState: block.renderState,
       contentHash: block.contentHash,
     })),
     // Apply inserts in reverse canonical order: each insert anchors
@@ -128,7 +114,6 @@ function patchesFromDiff(
       op: 'insert' as const,
       blockId: block.id,
       html: wrapBlock(block),
-      renderState: block.renderState,
       contentHash: block.contentHash,
       beforeId: beforeId ?? undefined,
     })),
@@ -143,6 +128,8 @@ function patchesFromDiff(
 export class DocumentSession {
   private _generation = 0;
   private _lastDoc: ParsedDocument | null = null;
+  private _restBlocks: readonly RenderBlock[] = [];
+  private _restGeneration = -1;
   private _disposed = false;
 
   constructor(
@@ -163,10 +150,31 @@ export class DocumentSession {
     return this._disposed;
   }
 
+  /** Finds a block in the most recently parsed document. */
+  findBlock(blockId: string): RenderBlock | null {
+    return this._lastDoc?.blocks.find(block => block.id === blockId) ?? null;
+  }
+
+  /** Blocks after the initial slice, re-sliced when the document has changed. */
+  get restBlocks(): readonly RenderBlock[] {
+    const doc = this._lastDoc;
+    if (!doc) return [];
+    if (this._restGeneration !== doc.generation) {
+      this._restBlocks = sliceInitial(doc, {
+        blockLimit: this._config.initialBlockLimit,
+        htmlCharLimit: this._config.initialHtmlCharLimit,
+      }).restBlocks;
+      this._restGeneration = doc.generation;
+    }
+    return this._restBlocks;
+  }
+
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
     this._lastDoc = null;
+    this._restBlocks = [];
+    this._restGeneration = -1;
   }
 
   buildInitPayload(initialLine: number): InitPayload {
@@ -196,6 +204,8 @@ console.log(`[MARKDOWN_SOURCE_PREVIEW_PERF] host parse-end gen=${gen} parseMs=${
       blockLimit: this._config.initialBlockLimit,
       htmlCharLimit: this._config.initialHtmlCharLimit,
     });
+    this._restBlocks = slice.restBlocks;
+    this._restGeneration = gen;
 
     if (__MARKDOWN_SOURCE_PREVIEW_LAB__) {
       const totalMs = performance.now() - tTotal;
@@ -261,7 +271,7 @@ console.log(`[MARKDOWN_SOURCE_PREVIEW_PERF] host parse-end gen=${gen} parseMs=${
     const hostPrepareMs = +(t3 - t0).toFixed(1);
 
     const hostTimings: PatchHostTimings = {
-      prepareMs: hostPrepareMs,
+      hostPrepareMs,
       getTextMs: +(t1 - t0).toFixed(1),
       parseMs: raw.parseMs,
       buildBlocksMs: +((t2 - t1) - raw.parseMs).toFixed(1),
@@ -282,17 +292,8 @@ console.log(`[MARKDOWN_SOURCE_PREVIEW_PERF] host parse-end gen=${gen} parseMs=${
     hostTimings.messageBytes = messageBytes;
 
     const timings: UpdateTimings = {
-      hostPrepareMs,
-      getTextMs: +(t1 - t0).toFixed(1),
-      parseMs: raw.parseMs,
-      buildBlocksMs: +((t2 - t1) - raw.parseMs).toFixed(1),
-      diffMs: +(t3 - t2).toFixed(1),
-      serializeEstimateMs: +(t4 - t3).toFixed(1),
+      ...hostTimings,
       postMessageMs: 0,
-      changedBlockCount: patches.length,
-      insertedBlockCount: inserted,
-      deletedBlockCount: deleted,
-      messageBytes,
       updateMode: window ? 'windowed-fullparse' : 'full-reparse',
       fallbackReason: window ? null : 'missing-content-changes',
       changeStartLine: startLine,
@@ -331,13 +332,5 @@ console.log(`[MARKDOWN_SOURCE_PREVIEW_PERF] host parse-end gen=${gen} parseMs=${
       this._generation,
     );
     return { ...raw, blocks };
-  }
-
-  setParsedDocument(document: ParsedDocument): void {
-    this._lastDoc = document;
-  }
-
-  incrementGeneration(): number {
-    return ++this._generation;
   }
 }

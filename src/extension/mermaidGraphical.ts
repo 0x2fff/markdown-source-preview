@@ -18,9 +18,10 @@ export function getMermaidGraphicalCommands(): string[] {
   const extension = vscode.extensions.getExtension(MERMAID_GRAPHICAL_EXTENSION_ID);
   const commands = extension?.packageJSON?.contributes?.commands;
   if (!Array.isArray(commands)) return [];
-  return commands
-    .map((entry: unknown) => (entry as { command?: unknown })?.command)
-    .filter((value): value is string => typeof value === 'string');
+  return commands.flatMap((entry: unknown) => {
+    const command = (entry as { command?: unknown })?.command;
+    return typeof command === 'string' ? [command] : [];
+  });
 }
 
 /** Reveals the block's source range so the external editor's CodeLens appears. */

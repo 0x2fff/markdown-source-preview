@@ -9,13 +9,7 @@
  * - never uses highlightAuto (too costly on large inputs)
  */
 
-type Hljs = {
-  getLanguage(name: string): unknown;
-  highlight(
-    code: string,
-    options: { language: string; ignoreIllegals: boolean },
-  ): { value: string };
-};
+import { loadHljs } from './highlightLoader.js';
 
 const MAX_LIVE_HIGHLIGHT_CHARS = 100_000;
 const LARGE_SOURCE_THRESHOLD = 50_000;
@@ -61,14 +55,6 @@ function escapeHtml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
-}
-
-let _hljsPromise: Promise<Hljs> | null = null;
-function loadHljs(): Promise<Hljs> {
-  _hljsPromise ??= import('highlight.js/lib/common').then(
-    (m: any) => m.default as Hljs,
-  );
-  return _hljsPromise;
 }
 
 /** Returns the index of the first closing fence line after the opener. */
