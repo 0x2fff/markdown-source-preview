@@ -274,9 +274,17 @@ root.addEventListener('pointermove', event => {
   updateInsertMarker(event.clientY);
 }, { passive: true, signal: lifecycleController.signal });
 
-root.addEventListener('pointerleave', hideInsertMarker, {
-  signal: lifecycleController.signal,
-});
+root.addEventListener('pointerleave', event => {
+  // Moving onto the insert marker must not hide it: the marker is a
+  // body-level overlay, so pointerleave fires even though the pointer
+  // is still inside the gap visually.
+  const related = event.relatedTarget;
+  if (related instanceof Element
+    && related.closest('.markdown-source-preview-insert-point')) {
+    return;
+  }
+  hideInsertMarker();
+}, { signal: lifecycleController.signal });
 
 // Any scroll moves content under a stationary pointer, so the marker
 // must not stay anchored to a stale gap.
@@ -943,13 +951,15 @@ function ensureInsertMarker(): HTMLElement {
   const marker = document.createElement('div');
   marker.className = 'markdown-source-preview-insert-point';
   marker.hidden = true;
-  marker.addEventListener('click', event => {
+  // pointerdown opens the editor immediately: waiting for `click` races
+  // with pointerleave/blur hiding the marker before the click dispatches.
+  marker.addEventListener('pointerdown', event => {
     event.preventDefault();
     event.stopPropagation();
-    // Resolve the anchor from the click position, not the last
+    // Resolve the anchor from the press position, not the last
     // pointermove snapshot: real pointer events can hide the marker
-    // between the hover update and the click dispatch. The snapshot
-    // remains as a fallback for clicks on the marker's edge pixels.
+    // between the hover update and the press. The snapshot remains as
+    // a fallback for presses on the marker's edge pixels.
     const anchor = gapAnchorAt(event.clientY)?.anchor ?? _insertMarkerAnchor;
     hideInsertMarker();
     if (anchor) openInsertEditor(anchor);
@@ -1023,7 +1033,7 @@ function updateInsertMarker(clientY: number): void {
   }
   const marker = ensureInsertMarker();
   const rootRect = root.getBoundingClientRect();
-  const top = Math.round(rootRect.top + found.markerTop - root.scrollTop) - 4;
+  const top = Math.round(rootRect.top + found.markerTop - root.scrollTop) - 6;
   const unchanged = _insertMarkerAnchor?.afterBlockId === found.anchor.afterBlockId
     && _insertMarkerAnchor?.beforeBlockId === found.anchor.beforeBlockId
     && marker.style.top === `${top}px`;

@@ -620,10 +620,10 @@ pre:has(code.language-mermaid) {
 
 .markdown-source-preview-insert-point {
   position: fixed;
-  height: 9px;
-  margin-top: -4px;
+  height: 12px;
+  margin-top: -6px;
   cursor: text;
-  z-index: 5;
+  z-index: 20;
 }
 
 .markdown-source-preview-insert-point::before {
@@ -631,7 +631,7 @@ pre:has(code.language-mermaid) {
   position: absolute;
   left: 0;
   right: 0;
-  top: 4px;
+  top: 5px;
   border-top: 1px solid var(--vscode-focusBorder);
 }
 
