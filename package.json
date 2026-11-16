@@ -132,6 +132,7 @@
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^26.6.6",
     "@types/vscode": "1.90.0",
+    "@vscode/vsce": "4.1.1",
     "commonmark-spec": "0.31.2",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
