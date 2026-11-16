@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.3
+
+- Consolidate parser and protocol types; extract shared loaders and
+  idle scheduling in the webview
+- Fully isolate LAB diagnostics from production behavior; production
+  bundles contain no edit metrics or table-queue telemetry
+- Merge Mermaid security/cache contract into `mermaidTheme.ts` and
+  drop `mermaidSecurity.ts`
+
 ## 0.1.2
 
 - Fix Mermaid diagrams keeping stale theme colors after a theme switch

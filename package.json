@@ -3,7 +3,7 @@
   "displayName": "Markdown Source Preview",
   "description": "A source-preserving Markdown preview with inline block editing.",
   "icon": "media/icon.png",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "0x2fff",
   "license": "MIT",
   "preview": true,
