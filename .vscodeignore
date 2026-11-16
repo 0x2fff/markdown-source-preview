@@ -1,0 +1,17 @@
+.vscode/**
+.github/**
+src/**
+node_modules/**
+test/**
+corpora/**
+docs/**
+media/*.md
+.bench/**
+**/*.map
+benchmark/**
+results/**
+screenshots/**
+*.vsix
+LEGAL_PROVENANCE.md
+tsconfig.json
+scripts/**

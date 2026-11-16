@@ -1,0 +1,672 @@
+
+:root {
+  --fg: var(--vscode-editor-foreground, #cdd6f4);
+  --bg: var(--vscode-editor-background, #1e1e2e);
+  --border: var(--vscode-editorGroup-border, #45475a);
+  --code-bg: var(--vscode-textCodeBlock-background, #181825);
+  --link: var(--vscode-textLink-foreground, #89b4fa);
+  --font-body: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+  --font-mono: var(--vscode-editor-font-family, "SF Mono", "Cascadia Code", Consolas, monospace);
+  --font-size: var(--vscode-editor-font-size, 14px);
+  --line-height: 1.6;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: var(--font-size);
+  line-height: var(--line-height);
+}
+
+#markdown-source-preview-root {
+  /* offsetParent for block offsetTop used by gap hit-testing. */
+  position: relative;
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 8px 24px 80px;
+}
+
+#markdown-source-preview-root > [data-block-id]:first-child {
+  margin-top: 0;
+}
+
+#markdown-source-preview-root > [data-block-id]:first-child > :first-child {
+  margin-top: 0;
+}
+
+/* ---------- Blocks ---------- */
+
+[data-block-id] {
+  margin-bottom: 0;
+}
+
+body[data-edit-mode="true"] [data-kind="heading"]:hover,
+body[data-edit-mode="true"] [data-kind="paragraph"]:hover,
+body[data-edit-mode="true"] [data-kind="fence"]:hover,
+body[data-edit-mode="true"] [data-kind="code_block"]:hover,
+body[data-edit-mode="true"] [data-kind="table"]:hover,
+body[data-edit-mode="true"] [data-kind="bullet_list"]:hover,
+body[data-edit-mode="true"] [data-kind="ordered_list"]:hover,
+body[data-edit-mode="true"] [data-kind="blockquote"]:hover,
+body[data-edit-mode="true"] [data-kind="mermaid"]:hover,
+body[data-edit-mode="true"] [data-kind="html_block"]:hover,
+body[data-edit-mode="true"] [data-kind="hr"]:hover,
+body[data-edit-mode="true"] [data-kind="frontmatter"]:hover {
+  outline: 1px solid var(--vscode-focusBorder);
+  cursor: text;
+}
+
+.markdown-source-preview-block--editing {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.markdown-source-preview-block-editor {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--vscode-focusBorder);
+  background: var(--vscode-editor-background);
+}
+
+.markdown-source-preview-block-editor:focus-within {
+  border-color: var(--vscode-focusBorder);
+  outline: none;
+}
+
+.markdown-source-preview-block-editor__input {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  margin: 0;
+  padding: 0;
+  resize: none;
+  overflow-x: auto;
+  overflow-y: auto;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  box-shadow: none;
+  color: var(--vscode-editor-foreground);
+  background: transparent;
+  caret-color: var(--vscode-editorCursor-foreground);
+  font-family: var(--vscode-editor-font-family, var(--font-mono));
+  font-size: var(--vscode-editor-font-size, 13px);
+  line-height: var(--vscode-editor-line-height, 1.5);
+  tab-size: 4;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.markdown-source-preview-block-editor__input:focus {
+  border: 0;
+  outline: none;
+  box-shadow: none;
+}
+
+.markdown-source-preview-block-editor__error {
+  max-height: 3.2em;
+  overflow: auto;
+  padding: 0 8px 6px;
+  color: var(--vscode-errorForeground, #f48771);
+  font-size: 0.9em;
+}
+
+[data-kind="fence"] .markdown-source-preview-block-editor__input,
+[data-kind="code_block"] .markdown-source-preview-block-editor__input,
+[data-kind="table"] .markdown-source-preview-block-editor__input,
+[data-kind="mermaid"] .markdown-source-preview-block-editor__input,
+[data-kind="frontmatter"] .markdown-source-preview-block-editor__input {
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+[data-kind="bullet_list"] .markdown-source-preview-block-editor__input,
+[data-kind="ordered_list"] .markdown-source-preview-block-editor__input,
+[data-kind="mermaid"] .markdown-source-preview-block-editor__input {
+  tab-size: 2;
+}
+
+/* ---------- Frontmatter ---------- */
+
+#markdown-source-preview-root [data-kind="frontmatter"] {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 4px 0 8px;
+  padding: 0;
+  border: 0;
+}
+
+#markdown-source-preview-root .markdown-source-preview-frontmatter {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--vscode-panel-border, var(--border));
+  border-radius: 3px;
+  background: var(--vscode-editorWidget-background, var(--code-bg));
+}
+
+#markdown-source-preview-root .markdown-source-preview-frontmatter > summary {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 28px;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 10px;
+  border: 0;
+  color: var(--vscode-descriptionForeground, #a6adc8);
+  font-size: 12px;
+  line-height: 28px;
+  cursor: pointer;
+  user-select: none;
+}
+
+#markdown-source-preview-root .markdown-source-preview-frontmatter > summary::marker {
+  font-size: 10px;
+}
+
+#markdown-source-preview-root .markdown-source-preview-frontmatter > summary::-webkit-details-marker {
+  margin: 0 6px 0 0;
+}
+
+#markdown-source-preview-root .markdown-source-preview-frontmatter[open] > :not(summary) {
+  margin: 0;
+  border-top: 1px solid var(--vscode-panel-border, var(--border));
+}
+
+#markdown-source-preview-root .markdown-source-preview-frontmatter__body {
+  margin: 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-family: var(--vscode-editor-font-family, var(--font-mono));
+  font-size: var(--vscode-editor-font-size, 13px);
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#markdown-source-preview-root [data-kind="frontmatter"] + [data-kind="heading"] {
+  margin-top: 8px;
+}
+
+#markdown-source-preview-root [data-kind="frontmatter"] + [data-kind="heading"] > :first-child {
+  margin-top: 0;
+}
+
+/* ---------- Headings ---------- */
+
+h1, h2, h3, h4, h5, h6 {
+  color: var(--fg);
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 1.5em 0 0.5em;
+}
+
+h1 { font-size: 2em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+h2 { font-size: 1.5em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+h3 { font-size: 1.25em; }
+
+/* ---------- Paragraphs and lists ---------- */
+
+p { margin: 0 0 1em; }
+
+ul, ol {
+  margin: 0 0 1em 0;
+  padding-left: 2em;
+}
+
+li { margin: 0.25em 0; }
+
+/* ---------- Code blocks ---------- */
+
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  overflow-x: auto;
+  margin: 0 0 1em;
+  min-height: 2em;
+}
+
+pre code {
+  display: block;
+  background: none;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  line-height: 1.5;
+  color: var(--fg);
+}
+
+pre code[data-hl-state="pending"] {
+  opacity: 0.8;
+}
+
+/* ---------- Inline code ---------- */
+
+code {
+  background: var(--code-bg);
+  border-radius: 3px;
+  padding: 0.1em 0.4em;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+/* ---------- Tables ---------- */
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0 0 1em;
+  overflow-x: auto;
+  display: block;
+}
+
+th, td {
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  text-align: left;
+}
+
+th {
+  background: var(--code-bg);
+  font-weight: 600;
+}
+
+tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* ---------- Blockquotes ---------- */
+
+blockquote {
+  border-left: 4px solid var(--border);
+  padding: 0.15em 0.75em;
+  margin: 0 0 1em;
+  color: color-mix(in srgb, var(--fg) 70%, transparent);
+  line-height: 1.5;
+}
+
+blockquote > :first-child {
+  margin-block-start: 0;
+  margin-top: 0;
+}
+
+blockquote > :last-child {
+  margin-block-end: 0;
+  margin-bottom: 0;
+}
+
+blockquote > p:only-child {
+  margin: 0;
+}
+
+/* ---------- Horizontal rules ---------- */
+
+hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.5em 0;
+}
+
+/* ---------- Links ---------- */
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* ---------- Mermaid ---------- */
+
+.mermaid-output {
+  margin: 0 0 1em;
+  overflow-x: auto;
+}
+
+.mermaid-output svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-error {
+  background: rgba(255, 80, 80, 0.1);
+  border: 1px solid rgba(255, 80, 80, 0.4);
+  border-radius: 4px;
+  padding: 8px 12px;
+  color: #f38ba8;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  margin: 0 0 1em;
+  white-space: pre-wrap;
+}
+
+pre:has(code.language-mermaid) {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mermaid-output.is-panning {
+  cursor: grabbing;
+}
+
+/* ---------- Mermaid split editor ---------- */
+
+/* The editing block is the query container so the split follows the edited
+   block's own width, not the whole webview. Container queries cannot style
+   the container element itself, so the grid lives on the island child. */
+[data-kind="mermaid"].markdown-source-preview-block--editing {
+  container-type: inline-size;
+  container-name: block-editor;
+}
+
+.markdown-source-preview-mermaid-editor {
+  --preview-dock-height: clamp(120px, 40%, 260px);
+  position: relative;
+  grid-template-columns: minmax(240px, 45%) minmax(280px, 55%);
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.markdown-source-preview-mermaid-editor__preview {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
+}
+
+.markdown-source-preview-mermaid-editor__canvas {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 100%;
+  min-height: 100%;
+  padding: 8px;
+}
+
+.markdown-source-preview-mermaid-editor__canvas svg {
+  display: block;
+  flex: none;
+  margin: auto;
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown-source-preview-mermaid-editor__source {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
+  border-left: 1px solid var(--vscode-panel-border);
+}
+
+.markdown-source-preview-mermaid-editor__input {
+  padding: 4px 6px;
+}
+
+.markdown-source-preview-mermaid-editor__status {
+  grid-column: 1 / -1;
+  max-height: 3em;
+  overflow: auto;
+  padding: 3px 6px;
+  color: var(--vscode-errorForeground);
+  background: var(--vscode-inputValidation-errorBackground);
+  border-top: 1px solid var(--vscode-inputValidation-errorBorder);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.markdown-source-preview-mermaid-editor__status[hidden] {
+  display: none;
+}
+
+@container block-editor (max-width: 620px) {
+  /* Stacked space is too cramped, so the source keeps the whole island and
+     the preview docks over its bottom edge. The textarea's bottom padding
+     matches the dock height so text never sits under the diagram. */
+  .markdown-source-preview-mermaid-editor {
+    display: block;
+  }
+
+  .markdown-source-preview-mermaid-editor__source {
+    position: absolute;
+    inset: 0;
+    border-left: 0;
+  }
+
+  .markdown-source-preview-mermaid-editor__preview {
+    position: absolute;
+    z-index: 2;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: var(--preview-dock-height);
+    background: color-mix(in srgb, var(--vscode-editor-background) 96%, transparent);
+    border-top: 1px solid var(--vscode-panel-border);
+    box-shadow: 0 -6px 16px rgb(0 0 0 / 18%);
+  }
+
+  .markdown-source-preview-mermaid-editor__preview svg {
+    max-height: calc(var(--preview-dock-height) - 12px);
+  }
+
+  .markdown-source-preview-mermaid-editor__input {
+    padding-bottom: calc(var(--preview-dock-height) + 8px);
+  }
+
+  .markdown-source-preview-mermaid-editor__status {
+    position: absolute;
+    z-index: 3;
+    left: 0;
+    right: 0;
+    bottom: var(--preview-dock-height);
+  }
+}
+
+/* ---------- Code editor overlay ---------- */
+
+.markdown-source-preview-code-editor {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.markdown-source-preview-code-editor__highlight,
+.markdown-source-preview-code-editor__input {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: auto;
+  white-space: pre;
+  overflow-wrap: normal;
+  tab-size: 4;
+  font-family: var(--vscode-editor-font-family, var(--font-mono));
+  font-size: var(--vscode-editor-font-size, 13px);
+  line-height: var(--vscode-editor-line-height, 1.5);
+  letter-spacing: normal;
+}
+
+.markdown-source-preview-code-editor__highlight {
+  z-index: 0;
+  pointer-events: none;
+  color: var(--vscode-editor-foreground);
+}
+
+.markdown-source-preview-code-editor__highlight code {
+  font: inherit;
+  background: transparent;
+}
+
+.markdown-source-preview-code-editor__input {
+  z-index: 1;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--vscode-editorCursor-foreground);
+  background: transparent;
+}
+
+.markdown-source-preview-code-editor__input::selection {
+  background: var(--vscode-editor-selectionBackground);
+}
+
+.markdown-source-preview-code-editor[data-composing="true"] .markdown-source-preview-code-editor__input {
+  color: var(--vscode-editor-foreground);
+  -webkit-text-fill-color: var(--vscode-editor-foreground);
+}
+
+.markdown-source-preview-code-editor[data-composing="true"] .markdown-source-preview-code-editor__highlight {
+  visibility: hidden;
+}
+
+/* ---------- highlight.js theme ---------- */
+
+.hljs-comment,
+.hljs-quote {
+  color: #6a9955;
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-doctag {
+  color: #569cd6;
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition {
+  color: #ce9178;
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-attribute,
+.hljs-symbol,
+.hljs-bullet {
+  color: #b5cea8;
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: #dcdcaa;
+}
+
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-link {
+  color: #4ec9b0;
+}
+
+.hljs-meta,
+.hljs-deletion {
+  color: #9cdcfe;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: bold;
+}
+
+/* ---------- Block insertion (edit mode) ---------- */
+
+.markdown-source-preview-insert-point {
+  position: fixed;
+  height: 9px;
+  margin-top: -4px;
+  cursor: text;
+  z-index: 5;
+}
+
+.markdown-source-preview-insert-point::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 4px;
+  border-top: 1px solid var(--vscode-focusBorder);
+}
+
+.markdown-source-preview-insert-editor {
+  box-sizing: border-box;
+  margin: 2px 0;
+  border: 1px solid var(--vscode-focusBorder);
+  background: var(--vscode-editor-background);
+}
+
+.markdown-source-preview-insert-editor__input {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 4.5em;
+  margin: 0;
+  padding: 6px 8px;
+  resize: vertical;
+  border: 0;
+  outline: none;
+  color: var(--vscode-editor-foreground);
+  background: transparent;
+  caret-color: var(--vscode-editorCursor-foreground);
+  font-family: var(--vscode-editor-font-family, var(--font-mono));
+  font-size: var(--vscode-editor-font-size, 13px);
+  line-height: var(--vscode-editor-line-height, 1.5);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.markdown-source-preview-empty-editor {
+  margin: 24px 0;
+  padding: 32px 16px;
+  border: 1px dashed var(--vscode-panel-border, var(--vscode-widget-border));
+  color: var(--vscode-descriptionForeground);
+  text-align: center;
+  cursor: text;
+}

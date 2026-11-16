@@ -1,0 +1,149 @@
+{
+  "name": "markdown-source-preview",
+  "displayName": "Markdown Source Preview",
+  "description": "A source-preserving Markdown preview with inline block editing.",
+  "icon": "media/icon.png",
+  "version": "0.1.0",
+  "publisher": "0x2fff",
+  "license": "MIT",
+  "preview": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/0x2fff/markdown-source-preview.git"
+  },
+  "homepage": "https://github.com/0x2fff/markdown-source-preview#readme",
+  "bugs": {
+    "url": "https://github.com/0x2fff/markdown-source-preview/issues"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onCustomEditor:markdownSourcePreview.preview",
+    "onCommand:markdownSourcePreview.openPreview",
+    "onCommand:markdownSourcePreview.toggleEditMode",
+    "onCommand:markdownSourcePreview.enterEditMode",
+    "onCommand:markdownSourcePreview.exitEditMode",
+    "onCommand:markdownSourcePreview.openMermaidGraphicalEditor"
+  ],
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "markdownSourcePreview.preview",
+        "displayName": "Markdown Source Preview",
+        "selector": [
+          {
+            "filenamePattern": "*.md"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "commands": [
+      {
+        "command": "markdownSourcePreview.openPreview",
+        "title": "Open Markdown Source Preview",
+        "category": "Markdown Source Preview",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "markdownSourcePreview.toggleEditMode",
+        "title": "Markdown Source Preview: Toggle Edit Mode",
+        "category": "Markdown Source Preview",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "markdownSourcePreview.enterEditMode",
+        "title": "Markdown Source Preview: Enter Edit Mode",
+        "category": "Markdown Source Preview"
+      },
+      {
+        "command": "markdownSourcePreview.exitEditMode",
+        "title": "Markdown Source Preview: Exit Edit Mode",
+        "category": "Markdown Source Preview"
+      },
+      {
+        "command": "markdownSourcePreview.openMermaidGraphicalEditor",
+        "title": "Markdown Source Preview: Open Mermaid Graphical Editor",
+        "category": "Markdown Source Preview"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "markdownSourcePreview.openPreview",
+          "when": "resourceExtname == .md",
+          "group": "navigation"
+        }
+      ],
+      "webview/context": [
+        {
+          "command": "markdownSourcePreview.openMermaidGraphicalEditor",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Markdown Source Preview",
+      "properties": {
+        "markdownSourcePreview.initialBlockLimit": {
+          "type": "number",
+          "default": 40,
+          "description": "Maximum number of top-level blocks to render synchronously in the initial viewport pass"
+        },
+        "markdownSourcePreview.initialSourceBytes": {
+          "type": "number",
+          "default": 98304,
+          "description": "Maximum source bytes to include in the initial viewport pass (96 KiB default)"
+        },
+        "markdownSourcePreview.debounceMs": {
+          "type": "number",
+          "default": 16,
+          "description": "Debounce delay in milliseconds for document edits (0 for immediate)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && npm run build:ext && npm run build:webview",
+    "build:ext": "esbuild src/extension/extension.ts --bundle --platform=node --external:vscode --define:__MARKDOWN_SOURCE_PREVIEW_LAB__=false --minify --outfile=dist/extension.js",
+    "build:webview": "esbuild src/webview/main.ts --bundle --platform=browser --format=esm --splitting --define:__MARKDOWN_SOURCE_PREVIEW_LAB__=false --minify --outdir=dist --entry-names=webview --chunk-names=chunks/[name]-[hash]",
+    "typecheck": "tsc --noEmit",
+    "test": "node test/unit/run.mjs",
+    "package": "vsce package --no-dependencies",
+    "build:lab:ext": "esbuild src/extension/extension.ts --bundle --platform=node --external:vscode --define:__MARKDOWN_SOURCE_PREVIEW_LAB__=true --outfile=dist/extension.js",
+    "build:lab:webview": "esbuild src/webview/main.ts --bundle --platform=browser --format=esm --splitting --define:__MARKDOWN_SOURCE_PREVIEW_LAB__=true --outdir=dist --entry-names=webview --chunk-names=chunks/[name]-[hash]",
+    "build:diagnostics": "npm run clean && npm run build:lab:ext && npm run build:lab:webview"
+  },
+  "dependencies": {
+    "@iconify-json/logos": "^1.2.19",
+    "highlight.js": "^11.11.1",
+    "markdown-it": "^14.1.0",
+    "markdown-it-task-lists": "^2.1.1",
+    "mermaid": "^12.3.0"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^20.0.0",
+    "@types/vscode": "1.90.0",
+    "commonmark-spec": "0.31.2",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.4.0"
+  },
+  "keywords": [
+    "markdown",
+    "preview",
+    "editor",
+    "edit",
+    "markdown editor",
+    "live preview",
+    "mermaid",
+    "syntax highlighting"
+  ]
+}
