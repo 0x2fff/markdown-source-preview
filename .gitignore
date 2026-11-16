@@ -1,37 +1,23 @@
-# 公開対象を製品本体と必須文書に限定する許可リスト方式。
-# ここに列挙しないルート項目は Git に入らない。
 /*
-
-# Git / エディタ公開設定
 !/.gitignore
 !/.vscodeignore
 !/.github/
-
-# 製品ソースと同梱メディア
 !/src/
 !/media/
-
-# パッケージ定義
 !/package.json
 !/package-lock.json
 !/tsconfig.json
-
-# 公開文書
 !/README.md
 !/CHANGELOG.md
 !/LICENSE
 !/SECURITY.md
 !/THIRD_PARTY_NOTICES.md
-
-# 公開 unit test は3ファイルのみ明示 (e2e/fixtures/release/将来の追加ファイルは非公開)
 !/test/
 !/test/unit/
 /test/unit/*
 !/test/unit/run.mjs
 !/test/unit/editing.test.ts
 !/test/unit/rendering.test.ts
-
-# 開発・生成物 (許可ディレクトリ配下の防御)
 /node_modules/
 /dist/
 /coverage/
