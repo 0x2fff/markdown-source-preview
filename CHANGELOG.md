@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.2
+
+- Fix Mermaid diagrams keeping stale theme colors after a theme switch
+- Split webview insert editor and save-state controllers out of main.ts
+- Diagnostics builds fully separated; production bundles no longer
+  contain edit metrics or patch timing code
+- Type markdown-it usage and trim redundant comments
+- Rename `initialSourceBytes` setting to `initialHtmlCharLimit`
+
 ## 0.1.1
 
 - Fix insert marker activation: open on pointerdown, enlarge hit area,
