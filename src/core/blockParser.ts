@@ -1,9 +1,44 @@
-/**
- * markdown-it based block parser running on the extension host.
- * No DOM dependencies; Node.js / Electron main only.
- */
-
 import type { RenderBlock, BlockKind, ParsedDocument } from './renderModel.js';
+
+interface MarkdownToken {
+  type: string;
+  nesting: number;
+  map: [number, number] | null;
+  info?: string;
+  content?: string;
+  attrGet(name: string): string | null;
+  attrSet(name: string, value: string): void;
+}
+
+interface RenderEnvironment {
+  resolveImage?: (src: string) => string | null;
+}
+
+type RendererRule = (
+  tokens: MarkdownToken[],
+  index: number,
+  options: unknown,
+  env: RenderEnvironment,
+  renderer: MarkdownRenderer,
+) => string;
+
+interface MarkdownRenderer {
+  rules: Record<string, RendererRule | undefined>;
+  render(tokens: MarkdownToken[], options: unknown, env: RenderEnvironment): string;
+  renderToken(tokens: MarkdownToken[], index: number, options: unknown): string;
+}
+
+interface MarkdownItLike {
+  options: unknown;
+  renderer: MarkdownRenderer;
+  linkify: { set(options: { fuzzyLink: boolean }): void };
+  parse(source: string, env: RenderEnvironment): MarkdownToken[];
+  use(plugin: unknown, options: unknown): MarkdownItLike;
+}
+
+interface MarkdownItConstructor {
+  new(options: unknown): MarkdownItLike;
+}
 
 // FNV-1a 32-bit hash
 
@@ -16,14 +51,12 @@ function hashString(s: string): string {
   return h.toString(16).padStart(8, '0');
 }
 
-// Lazy markdown-it loader
+let _md: MarkdownItLike | null = null;
 
-let _md: any = null;
-
-function getMd(): any {
+function getMd(): MarkdownItLike {
   if (_md) return _md;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const MarkdownIt = require('markdown-it');
+  const MarkdownIt = require('markdown-it') as MarkdownItConstructor;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const taskLists = require('markdown-it-task-lists');
   _md = new MarkdownIt({
@@ -37,14 +70,14 @@ function getMd(): any {
   _md.linkify.set({ fuzzyLink: true });
 
   const defaultImageRule = _md.renderer.rules.image
-    ?? ((tokens: any[], index: number, options: unknown, _env: unknown, self: any) =>
+    ?? ((tokens: MarkdownToken[], index: number, options: unknown, _env: unknown, self: MarkdownRenderer) =>
       self.renderToken(tokens, index, options));
   _md.renderer.rules.image = (
-    tokens: any[],
+    tokens: MarkdownToken[],
     index: number,
     options: unknown,
     env: { resolveImage?: (src: string) => string | null },
-    self: any,
+    self: MarkdownRenderer,
   ) => {
     const token = tokens[index];
     const src = token.attrGet('src');
@@ -69,7 +102,7 @@ export function slugifyHeading(text: string): string {
 }
 
 
-function inferKind(token: any): BlockKind {
+function inferKind(token: MarkdownToken): BlockKind {
   const type: string = token.type;
   if (type === 'heading_open') return 'heading';
   if (type === 'fence') {
@@ -136,7 +169,6 @@ export interface ParseOptions {
   reuse?: readonly RenderBlock[];
 }
 
-/** Parses Markdown text into a ParsedDocument. */
 export function parseDocument(source: string, opts: ParseOptions): ParsedDocument {
   const tParse = Date.now();
   const md = getMd();
@@ -154,8 +186,7 @@ export function parseDocument(source: string, opts: ParseOptions): ParsedDocumen
     parseSource = masked.join('\n');
   }
 
-  // markdown-it produces the token stream
-  const tokens: any[] = md.parse(parseSource, {});
+  const tokens: MarkdownToken[] = md.parse(parseSource, {});
   const parseMs = Date.now() - tParse;
   const headingSlugs = new Map<string, number>();
   for (let tokenIndex = 0; tokenIndex < tokens.length; tokenIndex++) {
@@ -176,7 +207,6 @@ export function parseDocument(source: string, opts: ParseOptions): ParsedDocumen
     }
   }
 
-  // Extract top-level blocks
   const blocks: RenderBlock[] = [];
   let depth = 0;
   let i = 0;
@@ -213,7 +243,7 @@ export function parseDocument(source: string, opts: ParseOptions): ParsedDocumen
 
       // Open tokens (heading_open, table_open, ...)
       if (t.nesting === 1) {
-        const groupTokens: any[] = [t];
+        const groupTokens: MarkdownToken[] = [t];
         const srcStart = t.map ? t.map[0] : (blocks.length > 0 ? blocks[blocks.length - 1].sourceEnd : 0);
         depth = 1;
         i++;
@@ -473,7 +503,6 @@ export interface DiffResult {
   deletes: Array<{ blockId: string }>;
 }
 
-/** Diffs previous and next block lists by ID and contentHash. */
 export function diffBlocks(prev: readonly RenderBlock[], next: readonly RenderBlock[]): DiffResult {
   const prevMap = new Map(prev.map(b => [b.id, b]));
   const nextMap = new Map(next.map(b => [b.id, b]));

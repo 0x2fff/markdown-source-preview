@@ -1,8 +1,3 @@
-/**
- * Shared type definitions used by both the extension host and the
- * webview. No DOM or vscode API dependencies.
- */
-
 // ---------- Block ----------
 
 /** A rendered unit corresponding to a top-level markdown-it token boundary. */

@@ -1,8 +1,3 @@
-/**
- * Pure helpers for source-preserving block edits.
- * No VS Code API or DOM dependencies.
- */
-
 import { isEditableBlockKind } from './renderModel.js';
 
 export interface SourceRange {

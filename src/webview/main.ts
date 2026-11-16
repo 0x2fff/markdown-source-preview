@@ -1,15 +1,11 @@
-/**
- * Webview entry point. Applies init/patch messages to the DOM, reports
- * timing, streams remaining blocks through a low-priority queue, and
- * lazily highlights code and renders Mermaid near the viewport.
- */
-
 import { BlockStore } from './blockStore.js';
 import { RenderQueue } from './renderQueue.js';
 import { HighlightQueue } from './highlightQueue.js';
 import { MermaidQueue } from './mermaidQueue.js';
 import { disposeInstrumentation, Instrumentation, isInstrumentationDisposed } from './instrumentation.js';
 import { editMetrics } from './editMetrics.js';
+import { editSave } from './editSaveController.js';
+import { InsertEditorController } from './insertEditorController.js';
 import { isEditableBlockKind } from '../core/renderModel.js';
 import {
   CodeEditorHighlight,
@@ -72,20 +68,7 @@ interface ActiveBlockEditor {
   commit: () => void;
 }
 
-interface PendingSaveMetric {
-  blockId: string;
-  at: number;
-  noOp: boolean;
-}
-
 let _activeBlockEditor: ActiveBlockEditor | undefined;
-let _pendingBeginAt: number | undefined;
-let _lastInputAt: number | undefined;
-let _compositionStartedAt: number | undefined;
-let _compositionEndedAt: number | undefined;
-let _pendingSave: PendingSaveMetric | undefined;
-let _pendingBlockSave: PendingSaveMetric | undefined;
-let _pendingCancelAt: number | undefined;
 let _pendingBeginBlockId: string | undefined;
 // Click position as normalized coordinates inside the block; applied to
 // caret and scroll when edit-started arrives.
@@ -102,22 +85,13 @@ interface TableBeginTarget {
 let _pendingBeginTable: TableBeginTarget | undefined;
 let _activeCodeHighlight: CodeEditorHighlight | undefined;
 
-interface InsertAnchor {
-  beforeBlockId?: string;
-  afterBlockId?: string;
-}
-
-interface ActiveInsertEditor {
-  element: HTMLElement;
-  textarea: HTMLTextAreaElement;
-  beforeBlockId?: string;
-  afterBlockId?: string;
-}
-
-let _activeInsertEditor: ActiveInsertEditor | undefined;
-let _insertMarker: HTMLElement | undefined;
-let _insertMarkerAnchor: InsertAnchor | undefined;
-let _emptyEditor: HTMLElement | undefined;
+const insertEditor = new InsertEditorController(
+  root,
+  blockStore,
+  postToHost,
+  () => _activeBlockEditor !== undefined,
+  lifecycleController.signal,
+);
 
 if (__MARKDOWN_SOURCE_PREVIEW_LAB__) {
   (window as Window & {
@@ -254,49 +228,9 @@ root.addEventListener('click', event => {
     return;
   }
   event.preventDefault();
-  _pendingBeginAt = performance.now();
+  editMetrics.markBegin();
   postToHost({ type: 'begin-edit', payload: { blockId } });
 }, { signal: lifecycleController.signal });
-
-// Shows one shared insertion marker only while the pointer is over
-// whitespace between blocks. Block content itself never shows it, so
-// hovering headings or diagrams does not move any DOM.
-root.addEventListener('pointermove', event => {
-  if (_editMode !== 'edit' || _activeBlockEditor || _activeInsertEditor) {
-    hideInsertMarker();
-    return;
-  }
-  const target = event.target;
-  if (!(target instanceof Element) || target.closest('[data-block-id]')) {
-    hideInsertMarker();
-    return;
-  }
-  updateInsertMarker(event.clientY);
-}, { passive: true, signal: lifecycleController.signal });
-
-root.addEventListener('pointerleave', event => {
-  // Moving onto the insert marker must not hide it: the marker is a
-  // body-level overlay, so pointerleave fires even though the pointer
-  // is still inside the gap visually.
-  const related = event.relatedTarget;
-  if (related instanceof Element
-    && related.closest('.markdown-source-preview-insert-point')) {
-    return;
-  }
-  hideInsertMarker();
-}, { signal: lifecycleController.signal });
-
-// Any scroll moves content under a stationary pointer, so the marker
-// must not stay anchored to a stale gap.
-document.addEventListener('scroll', hideInsertMarker, {
-  capture: true,
-  passive: true,
-  signal: lifecycleController.signal,
-});
-
-window.addEventListener('resize', hideInsertMarker, {
-  signal: lifecycleController.signal,
-});
 
 // Notifies the host of right-clicks on Mermaid blocks so the
 // webview/context menu command can identify its target.
@@ -370,18 +304,13 @@ attachDiagramView(root, lifecycleController.signal);
 postToHost({ type: 'ready' });
 
 function setEditMode(mode: 'read' | 'edit' | 'readonly'): void {
-  if (mode !== 'edit' && _activeInsertEditor) {
-    // Auto-save on mode exit, matching block editor behavior.
-    commitInsertEditor(true);
-  }
   _editMode = mode;
-  hideInsertMarker();
+  insertEditor.setMode(mode);
   root.dataset.editMode = String(mode === 'edit');
   // Toggling data-editable on every block makes style recalculation
   // expensive on ~1 MiB documents, so hover is driven by a body
   // attribute plus CSS instead.
   document.body.dataset.editMode = String(mode === 'edit');
-  syncEmptyEditor();
 }
 
 let _measureCanvas: HTMLCanvasElement | undefined;
@@ -559,8 +488,7 @@ function beginBlockEditor(blockId: string, source: string): void {
     return;
   }
 
-  const beginAt = _pendingBeginAt;
-  _pendingBeginAt = undefined;
+  const beginAt = editMetrics.consumeBegin();
   // Fix the rendered height as the outer size. Long Markdown scrolls
   // inside the textarea so surrounding layout does not move while editing.
   const rect = element.getBoundingClientRect();
@@ -649,12 +577,8 @@ function beginBlockEditor(blockId: string, source: string): void {
     textarea,
     initialSource: source,
     commit: () => {
-      if (_activeBlockEditor !== editor || _pendingSave) return;
-      _pendingSave = {
-        blockId,
-        at: performance.now(),
-        noOp: textarea.value === source,
-      };
+      if (_activeBlockEditor !== editor || editSave.hasPendingSave()) return;
+      editSave.beginSave(blockId, textarea.value === source);
       postToHost({
         type: 'commit-edit',
         payload: { blockId, markdown: textarea.value },
@@ -672,22 +596,17 @@ function beginBlockEditor(blockId: string, source: string): void {
     payload: { blockId, markdown: textarea.value },
   });
   const cancel = () => {
-    _pendingCancelAt = performance.now();
+    editMetrics.markCancel();
     postToHost({ type: 'cancel-edit', payload: { blockId } });
   };
 
   textarea.addEventListener('input', event => {
     const inputEvent = event as InputEvent;
-    if (!inputEvent.isComposing) {
-      const now = performance.now();
-      const from = _compositionEndedAt ?? _lastInputAt ?? now;
-      const isIme = _compositionEndedAt !== undefined || _compositionStartedAt !== undefined;
-      _compositionStartedAt = undefined;
-      _compositionEndedAt = undefined;
-      _lastInputAt = undefined;
+    if (!inputEvent.isComposing && __MARKDOWN_SOURCE_PREVIEW_LAB__) {
+      const inputMetric = editMetrics.consumeInput();
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          editMetrics.record(isIme ? 'imeCommitMs' : 'asciiInputMs', performance.now() - from);
+          editMetrics.record(inputMetric.ime ? 'imeCommitMs' : 'asciiInputMs', performance.now() - inputMetric.startedAt);
         });
       });
     }
@@ -732,7 +651,7 @@ function beginBlockEditor(blockId: string, source: string): void {
         data: '    ',
       }));
     } else if (!event.metaKey && !event.ctrlKey && !event.altKey && event.key.length === 1) {
-      _lastInputAt = performance.now();
+      editMetrics.markKeyInput();
     }
   }, { signal: lifecycleController.signal });
   textarea.addEventListener('blur', () => {
@@ -740,12 +659,11 @@ function beginBlockEditor(blockId: string, source: string): void {
     if (_activeBlockEditor === editor) editor.commit();
   }, { signal: lifecycleController.signal });
   textarea.addEventListener('compositionstart', () => {
-    _compositionStartedAt = performance.now();
-    _compositionEndedAt = undefined;
+    editMetrics.compositionStart();
     if (codeEditorWrap) codeEditorWrap.dataset.composing = 'true';
   }, { signal: lifecycleController.signal });
   textarea.addEventListener('compositionend', () => {
-    _compositionEndedAt = performance.now();
+    editMetrics.compositionEnd();
     if (codeEditorWrap) delete codeEditorWrap.dataset.composing;
     _activeCodeHighlight?.schedule(textarea.value);
   }, { signal: lifecycleController.signal });
@@ -772,7 +690,7 @@ function beginBlockEditor(blockId: string, source: string): void {
     window.scrollBy({ top: scrollDelta, behavior: 'auto' });
   }
 
-  if (beginAt !== undefined) {
+  if (beginAt !== undefined && __MARKDOWN_SOURCE_PREVIEW_LAB__) {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         editMetrics.record('islandStartMs', performance.now() - beginAt);
@@ -855,7 +773,7 @@ function finishBlockEditor(blockId: string, outcome: 'saved' | 'discarded'): voi
   _activeCodeHighlight = undefined;
   const pendingBegin = outcome === 'saved' ? _pendingBeginBlockId : undefined;
   _pendingBeginBlockId = undefined;
-  const noOpSave = outcome === 'saved' && _pendingSave?.blockId === blockId && _pendingSave.noOp;
+  const noOpSave = outcome === 'saved' && editSave.isNoOpSave(blockId);
   if (editor.element.isConnected) {
     editor.element.innerHTML = editor.originalHtml;
   }
@@ -869,25 +787,15 @@ function finishBlockEditor(blockId: string, outcome: 'saved' | 'discarded'): voi
     releaseBlockEditHeight(editor.element);
   }
 
-  if (outcome === 'saved' && _pendingSave?.blockId === blockId) {
-    const pending = _pendingSave;
-    _pendingSave = undefined;
-    if (pending.noOp) {
-      editMetrics.record('noOpSaveMs', performance.now() - pending.at);
-    } else {
-      _pendingBlockSave = pending;
-    }
-  } else if (outcome === 'discarded') {
-    if (_pendingCancelAt !== undefined) {
-      editMetrics.record('cancelMs', performance.now() - _pendingCancelAt);
-    }
-    _pendingCancelAt = undefined;
-    _pendingSave = undefined;
-    _pendingBlockSave = undefined;
+  if (outcome === 'saved') {
+    editMetrics.finishSave(editSave.consumeSave(blockId));
+  } else {
+    editSave.clearSave();
+    editMetrics.finishCancel();
   }
 
   if (pendingBegin !== undefined) {
-    _pendingBeginAt = performance.now();
+    editMetrics.markBegin();
     postToHost({ type: 'begin-edit', payload: { blockId: pendingBegin } });
   }
 }
@@ -928,14 +836,14 @@ function refreshBlock(blockId: string, html: string): void {
     releaseBlockEditHeight(editor.element);
   }
   blockStore.upsert(blockId, html);
-  hideInsertMarker();
+  insertEditor.hideMarker();
 }
 
 function showBlockEditError(blockId: string, message: string): void {
   const editor = _activeBlockEditor;
   if (!editor || editor.blockId !== blockId) return;
   // Allow the next Cmd/Ctrl+S after a rejected save.
-  _pendingSave = undefined;
+  editSave.clearSave();
   // Drop the pending block switch tied to a failed save and keep editing.
   _pendingBeginBlockId = undefined;
   const error = editor.element.querySelector<HTMLElement>('.markdown-source-preview-block-editor__error');
@@ -945,189 +853,6 @@ function showBlockEditError(blockId: string, message: string): void {
   }
 }
 
-
-function ensureInsertMarker(): HTMLElement {
-  if (_insertMarker) return _insertMarker;
-  const marker = document.createElement('div');
-  marker.className = 'markdown-source-preview-insert-point';
-  marker.hidden = true;
-  // pointerdown opens the editor immediately: waiting for `click` races
-  // with pointerleave/blur hiding the marker before the click dispatches.
-  marker.addEventListener('pointerdown', event => {
-    event.preventDefault();
-    event.stopPropagation();
-    // Resolve the anchor from the press position, not the last
-    // pointermove snapshot: real pointer events can hide the marker
-    // between the hover update and the press. The snapshot remains as
-    // a fallback for presses on the marker's edge pixels.
-    const anchor = gapAnchorAt(event.clientY)?.anchor ?? _insertMarkerAnchor;
-    hideInsertMarker();
-    if (anchor) openInsertEditor(anchor);
-  }, { signal: lifecycleController.signal });
-  // The marker lives on document.body as position:fixed so it never
-  // enters root.children and keeps the block binary search clean.
-  document.body.appendChild(marker);
-  _insertMarker = marker;
-  return marker;
-}
-
-function hideInsertMarker(): void {
-  _insertMarkerAnchor = undefined;
-  if (_insertMarker) _insertMarker.hidden = true;
-}
-
-/**
- * Locates the whitespace gap under clientY and returns the insertion
- * anchor plus the marker's top offset inside root's coordinate space.
- * Block positions come from offsetTop/offsetHeight so the lookup does
- * not depend on scroll position or require layout reads per block.
- */
-function gapAnchorAt(clientY: number): { anchor: InsertAnchor; markerTop: number } | undefined {
-  const rootRect = root.getBoundingClientRect();
-  const y = clientY - rootRect.top + root.scrollTop;
-  const children = root.children;
-  // Binary search for the first child whose bottom edge is below y.
-  // Children are in document order, so offsetTop ordering holds.
-  let lo = 0;
-  let hi = children.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    const child = children[mid] as HTMLElement;
-    if (child.offsetTop + child.offsetHeight <= y) lo = mid + 1;
-    else hi = mid;
-  }
-  // Skip non-block children (insert island, empty editor) to find the
-  // surrounding blocks.
-  const isBlockChild = (el: Element): el is HTMLElement =>
-    el instanceof HTMLElement && el.dataset.blockId !== undefined;
-  let nextIndex = lo;
-  while (nextIndex < children.length && !isBlockChild(children[nextIndex])) nextIndex++;
-  let prevIndex = lo - 1;
-  while (prevIndex >= 0 && !isBlockChild(children[prevIndex])) prevIndex--;
-  const next = nextIndex < children.length ? children[nextIndex] as HTMLElement : undefined;
-  const prev = prevIndex >= 0 ? children[prevIndex] as HTMLElement : undefined;
-  if (!prev && !next) return undefined;
-  // y inside a block means the pointer is over content, not a gap.
-  if (next && y >= next.offsetTop) return undefined;
-
-  const anchor: InsertAnchor = {};
-  if (prev) anchor.afterBlockId = prev.dataset.blockId;
-  if (next) anchor.beforeBlockId = next.dataset.blockId;
-
-  let markerTop: number;
-  if (prev && next) {
-    markerTop = (prev.offsetTop + prev.offsetHeight + next.offsetTop) / 2;
-  } else if (next) {
-    markerTop = next.offsetTop;
-  } else {
-    markerTop = (prev as HTMLElement).offsetTop + (prev as HTMLElement).offsetHeight;
-  }
-  return { anchor, markerTop };
-}
-
-function updateInsertMarker(clientY: number): void {
-  const found = gapAnchorAt(clientY);
-  if (!found) {
-    hideInsertMarker();
-    return;
-  }
-  const marker = ensureInsertMarker();
-  const rootRect = root.getBoundingClientRect();
-  const top = Math.round(rootRect.top + found.markerTop - root.scrollTop) - 6;
-  const unchanged = _insertMarkerAnchor?.afterBlockId === found.anchor.afterBlockId
-    && _insertMarkerAnchor?.beforeBlockId === found.anchor.beforeBlockId
-    && marker.style.top === `${top}px`;
-  if (unchanged) return;
-  _insertMarkerAnchor = found.anchor;
-  marker.style.left = `${Math.round(rootRect.left)}px`;
-  marker.style.width = `${Math.round(rootRect.width)}px`;
-  marker.style.top = `${top}px`;
-  marker.hidden = false;
-}
-
-function openInsertEditor(anchor: InsertAnchor): void {
-  if (_activeInsertEditor || _activeBlockEditor) return;
-  const element = document.createElement('div');
-  element.className = 'markdown-source-preview-insert-editor';
-  const textarea = document.createElement('textarea');
-  textarea.className = 'markdown-source-preview-insert-editor__input';
-  textarea.placeholder = 'Markdown…';
-  element.appendChild(textarea);
-
-  const before = anchor.beforeBlockId !== undefined
-    ? blockStore.get(anchor.beforeBlockId)
-    : undefined;
-  const after = anchor.afterBlockId !== undefined
-    ? blockStore.get(anchor.afterBlockId)
-    : undefined;
-  if (before) before.before(element);
-  else if (after) after.after(element);
-  else root.appendChild(element);
-
-  _activeInsertEditor = {
-    element,
-    textarea,
-    beforeBlockId: anchor.beforeBlockId,
-    afterBlockId: anchor.afterBlockId,
-  };
-  syncEmptyEditor();
-
-  textarea.addEventListener('keydown', event => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
-      event.preventDefault();
-      commitInsertEditor(true);
-      return;
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      event.stopPropagation();
-      commitInsertEditor(false);
-    }
-  }, { signal: lifecycleController.signal });
-  textarea.addEventListener('blur', () => commitInsertEditor(true), {
-    signal: lifecycleController.signal,
-  });
-
-  textarea.focus();
-}
-
-function commitInsertEditor(save: boolean): void {
-  const editor = _activeInsertEditor;
-  if (!editor) return;
-  _activeInsertEditor = undefined;
-  const markdown = editor.textarea.value;
-  editor.element.remove();
-  syncEmptyEditor();
-  if (!save || !markdown.trim()) return;
-  postToHost({
-    type: 'insert-markdown',
-    payload: {
-      beforeBlockId: editor.beforeBlockId,
-      afterBlockId: editor.afterBlockId,
-      markdown,
-    },
-  });
-}
-
-function syncEmptyEditor(): void {
-  const show = _editMode === 'edit'
-    && !_activeInsertEditor
-    && !_activeBlockEditor
-    && root.querySelector(':scope > [data-block-id]') === null;
-  if (show && !_emptyEditor) {
-    const element = document.createElement('div');
-    element.className = 'markdown-source-preview-empty-editor';
-    element.textContent = 'Click to start writing Markdown';
-    element.addEventListener('click', () => openInsertEditor({}), {
-      signal: lifecycleController.signal,
-    });
-    root.appendChild(element);
-    _emptyEditor = element;
-  } else if (!show && _emptyEditor) {
-    _emptyEditor.remove();
-    _emptyEditor = undefined;
-  }
-}
 
 function handleInit(payload: InitPayload): void {
   _currentGeneration = payload.generation;
@@ -1165,7 +890,7 @@ function handleInit(payload: InitPayload): void {
 
   highlightQueue.attach(root);
   mermaidQueue.attach(root);
-  syncEmptyEditor();
+  insertEditor.syncEmptyEditor();
 }
 
 
@@ -1229,13 +954,7 @@ function handlePatch(payload: PatchPayload): void {
   // flush applies only CHUNK_SIZE items to the DOM synchronously
   renderQueue.flush();
 
-  if (_pendingBlockSave && changedBlockIds.length > 0) {
-    // Block IDs can change after a re-parse, so treat the first patch
-    // after a save as the saved block landing and record end-to-end
-    // save time.
-    editMetrics.record('blockSaveMs', performance.now() - _pendingBlockSave.at);
-    _pendingBlockSave = undefined;
-  }
+  editMetrics.patchApplied(changedBlockIds.length > 0);
 
   // domApplyMs: synchronous time from message receipt to flush
   // completion. Remaining rest blocks continue on later rAFs, but
@@ -1289,8 +1008,8 @@ function handlePatch(payload: PatchPayload): void {
     }
   }
 
-  hideInsertMarker();
-  syncEmptyEditor();
+  insertEditor.hideMarker();
+  insertEditor.syncEmptyEditor();
 }
 
 // Diagnostics message handler (ack record echoed back by the host)
@@ -1390,6 +1109,7 @@ let cleanupSnapshot: WebviewCleanupSnapshot | undefined;
 function disposeWebview(): WebviewCleanupSnapshot {
   if (cleanupSnapshot) return cleanupSnapshot;
   lifecycleController.abort();
+  insertEditor.dispose();
   renderQueue.dispose();
   highlightQueue.dispose();
   mermaidQueue.dispose();

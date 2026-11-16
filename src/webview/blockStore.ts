@@ -1,7 +1,3 @@
-/**
- * Manages block elements in the DOM, keyed by data-block-id.
- */
-
 export class BlockStore {
   private readonly _idToEl = new Map<string, HTMLElement>();
 
@@ -81,7 +77,6 @@ export class BlockStore {
     }
   }
 
-  /** Returns all current block IDs in DOM order. */
   blockIds(): string[] {
     const ids: string[] = [];
     const els = this._root.querySelectorAll<HTMLElement>('[data-block-id]');

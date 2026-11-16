@@ -169,7 +169,6 @@ export class DocumentSession {
     this._lastDoc = null;
   }
 
-/** Parses the document and returns the initial payload. */
   buildInitPayload(initialLine: number): InitPayload {
     if (this._disposed) throw new Error('Cannot initialize a disposed document session');
     const tTotal = performance.now();

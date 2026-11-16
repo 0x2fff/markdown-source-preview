@@ -1,7 +1,3 @@
-/**
- * Extension entry point. Registers the preview provider and commands.
- */
-
 import * as vscode from 'vscode';
 import * as fs from 'node:fs';
 import { PreviewProvider } from './previewProvider.js';
@@ -9,7 +5,6 @@ import { PreviewProvider } from './previewProvider.js';
 export function activate(ctx: vscode.ExtensionContext): void {
   const provider = new PreviewProvider(ctx);
 
-  // Register as a CustomTextEditorProvider
   ctx.subscriptions.push(
     vscode.window.registerCustomEditorProvider(
       PreviewProvider.VIEW_TYPE,

@@ -1,7 +1,4 @@
-/**
- * Input and save latency metrics for editor islands.
- * Exposed on window.__MARKDOWN_SOURCE_PREVIEW_EDIT_METRICS__ for diagnostics.
- */
+import type { PendingSave } from './editSaveController.js';
 
 export type EditMetricName =
   | 'islandStartMs'
@@ -15,6 +12,23 @@ export interface EditMetricsSnapshot {
   samples: Record<EditMetricName, number[]>;
   longTasks: number[];
   longTaskMaxMs: number | null;
+}
+
+export interface EditMetrics {
+  record(name: EditMetricName, ms: number): void;
+  markBegin(): void;
+  consumeBegin(): number | undefined;
+  markKeyInput(): void;
+  compositionStart(): void;
+  compositionEnd(): void;
+  consumeInput(): { startedAt: number; ime: boolean };
+  finishSave(pending: PendingSave | undefined): void;
+  markCancel(): void;
+  finishCancel(): void;
+  patchApplied(changed: boolean): void;
+  recordLongTask(duration: number): void;
+  reset(): void;
+  snapshot(): EditMetricsSnapshot;
 }
 
 const NAMES: EditMetricName[] = [
@@ -37,34 +51,131 @@ function emptySamples(): Record<EditMetricName, number[]> {
   };
 }
 
-class EditMetrics {
-  private _samples = emptySamples();
-  private _longTasks: number[] = [];
+const EMPTY_SNAPSHOT: EditMetricsSnapshot = {
+  samples: {} as Record<EditMetricName, number[]>,
+  longTasks: [],
+  longTaskMaxMs: null,
+};
+
+class EditMetricsController implements EditMetrics {
+  private samples = emptySamples();
+  private longTasks: number[] = [];
+  private beginAt: number | undefined;
+  private lastInputAt: number | undefined;
+  private compositionStartedAt: number | undefined;
+  private compositionEndedAt: number | undefined;
+  private pendingBlockSave: { at: number } | undefined;
+  private cancelAt: number | undefined;
 
   record(name: EditMetricName, ms: number): void {
-    if (!__MARKDOWN_SOURCE_PREVIEW_LAB__ || !Number.isFinite(ms) || ms < 0) return;
-    this._samples[name].push(+ms.toFixed(3));
+    if (!Number.isFinite(ms) || ms < 0) return;
+    this.samples[name].push(+ms.toFixed(3));
+  }
+
+  markBegin(): void {
+    this.beginAt = performance.now();
+  }
+
+  consumeBegin(): number | undefined {
+    const value = this.beginAt;
+    this.beginAt = undefined;
+    return value;
+  }
+
+  markKeyInput(): void {
+    this.lastInputAt = performance.now();
+  }
+
+  compositionStart(): void {
+    this.compositionStartedAt = performance.now();
+    this.compositionEndedAt = undefined;
+  }
+
+  compositionEnd(): void {
+    this.compositionEndedAt = performance.now();
+  }
+
+  consumeInput(): { startedAt: number; ime: boolean } {
+    const now = performance.now();
+    const result = {
+      startedAt: this.compositionEndedAt ?? this.lastInputAt ?? now,
+      ime: this.compositionEndedAt !== undefined || this.compositionStartedAt !== undefined,
+    };
+    this.compositionStartedAt = undefined;
+    this.compositionEndedAt = undefined;
+    this.lastInputAt = undefined;
+    return result;
+  }
+
+  // Receives the save state consumed from EditSaveController; only the
+  // timing fields feed diagnostics.
+  finishSave(pending: PendingSave | undefined): void {
+    if (!pending) return;
+    if (pending.noOp) this.record('noOpSaveMs', performance.now() - pending.at);
+    else this.pendingBlockSave = { at: pending.at };
+  }
+
+  markCancel(): void {
+    this.cancelAt = performance.now();
+  }
+
+  finishCancel(): void {
+    if (this.cancelAt !== undefined) this.record('cancelMs', performance.now() - this.cancelAt);
+    this.cancelAt = undefined;
+    this.pendingBlockSave = undefined;
+  }
+
+  patchApplied(changed: boolean): void {
+    if (!changed || !this.pendingBlockSave) return;
+    this.record('blockSaveMs', performance.now() - this.pendingBlockSave.at);
+    this.pendingBlockSave = undefined;
   }
 
   recordLongTask(duration: number): void {
-    if (!__MARKDOWN_SOURCE_PREVIEW_LAB__ || !Number.isFinite(duration) || duration <= 0) return;
-    this._longTasks.push(+duration.toFixed(3));
+    if (!Number.isFinite(duration) || duration <= 0) return;
+    this.longTasks.push(+duration.toFixed(3));
   }
 
   reset(): void {
-    this._samples = emptySamples();
-    this._longTasks.length = 0;
+    this.samples = emptySamples();
+    this.longTasks.length = 0;
+    this.beginAt = undefined;
+    this.lastInputAt = undefined;
+    this.compositionStartedAt = undefined;
+    this.compositionEndedAt = undefined;
+    this.pendingBlockSave = undefined;
+    this.cancelAt = undefined;
   }
 
   snapshot(): EditMetricsSnapshot {
     return {
       samples: Object.fromEntries(
-        NAMES.map(name => [name, [...this._samples[name]]]),
+        NAMES.map(name => [name, [...this.samples[name]]]),
       ) as Record<EditMetricName, number[]>,
-      longTasks: [...this._longTasks],
-      longTaskMaxMs: this._longTasks.length ? Math.max(...this._longTasks) : null,
+      longTasks: [...this.longTasks],
+      longTaskMaxMs: this.longTasks.length ? Math.max(...this.longTasks) : null,
     };
   }
 }
 
-export const editMetrics = new EditMetrics();
+const NOOP_METRICS: EditMetrics = {
+  record: () => {},
+  markBegin: () => {},
+  consumeBegin: () => undefined,
+  markKeyInput: () => {},
+  compositionStart: () => {},
+  compositionEnd: () => {},
+  consumeInput: () => ({ startedAt: 0, ime: false }),
+  finishSave: () => {},
+  markCancel: () => {},
+  finishCancel: () => {},
+  patchApplied: () => {},
+  recordLongTask: () => {},
+  reset: () => {},
+  snapshot: () => EMPTY_SNAPSHOT,
+};
+
+// Diagnostics builds get the real controller; production builds get a
+// no-op so timing state, metric names, and sample storage are eliminated.
+export const editMetrics: EditMetrics =
+  __MARKDOWN_SOURCE_PREVIEW_LAB__ ? new EditMetricsController() : NOOP_METRICS;

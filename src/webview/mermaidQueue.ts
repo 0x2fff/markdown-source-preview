@@ -117,7 +117,6 @@ export class MermaidQueue {
     }
     : undefined;
 
-  /** Starts the Mermaid module import without blocking initial render. */
   preload(): void {
     void this._loadMermaid().catch(error => {
       console.error(`[Markdown Source Preview] Mermaid module preload failed: ${String(error)}`);
