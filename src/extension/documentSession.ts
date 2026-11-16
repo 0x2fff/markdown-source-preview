@@ -23,7 +23,7 @@ import type {
 
 export interface SessionConfig {
   initialBlockLimit: number;
-  initialSourceBytes: number;
+  initialHtmlCharLimit: number;
 }
 
 export interface DocumentRenderOptions {
@@ -195,7 +195,7 @@ console.log(`[MARKDOWN_SOURCE_PREVIEW_PERF] host parse-end gen=${gen} parseMs=${
 
     const slice = sliceInitial(doc, {
       blockLimit: this._config.initialBlockLimit,
-      sourceByteLimit: this._config.initialSourceBytes,
+      htmlCharLimit: this._config.initialHtmlCharLimit,
     });
 
     if (__MARKDOWN_SOURCE_PREVIEW_LAB__) {

@@ -95,10 +95,10 @@
           "default": 40,
           "description": "Maximum number of top-level blocks to render synchronously in the initial viewport pass"
         },
-        "markdownSourcePreview.initialSourceBytes": {
+        "markdownSourcePreview.initialHtmlCharLimit": {
           "type": "number",
           "default": 98304,
-          "description": "Maximum source bytes to include in the initial viewport pass (96 KiB default)"
+          "description": "Approximate maximum HTML size (in characters) for the initial viewport slice"
         },
         "markdownSourcePreview.debounceMs": {
           "type": "number",

@@ -15,3 +15,7 @@ screenshots/**
 LEGAL_PROVENANCE.md
 tsconfig.json
 scripts/**
+
+**/.DS_Store
+**/._*
+__MACOSX/

@@ -1170,9 +1170,12 @@ function handleInit(payload: InitPayload): void {
 
 
 function handlePatch(payload: PatchPayload): void {
-  const webviewReceivedEpochMs = performance.timeOrigin + performance.now();
-  const receivedAt = performance.now();
-  const queueAtReceive = renderQueue.telemetry;
+  // Diagnostics-only captures; the LAB constant folds these away in
+  // production builds.
+  const isLab = __MARKDOWN_SOURCE_PREVIEW_LAB__;
+  const receivedAt = isLab ? performance.now() : 0;
+  const webviewReceivedEpochMs = isLab ? performance.timeOrigin + receivedAt : 0;
+  const queueAtReceive = isLab ? renderQueue.telemetry : null;
   // Drop patches from older generations
   if (payload.generation < _currentGeneration) {
     console.warn(`[Markdown Source Preview] stale patch dropped gen=${payload.generation} current=${_currentGeneration}`);
@@ -1193,8 +1196,8 @@ function handlePatch(payload: PatchPayload): void {
     _pendingBeginBlockId = undefined;
   }
 
-  const domApplyStarted = performance.now();
-  const domApplyStartedEpochMs = performance.timeOrigin + domApplyStarted;
+  const domApplyStarted = isLab ? performance.now() : 0;
+  const domApplyStartedEpochMs = isLab ? performance.timeOrigin + domApplyStarted : 0;
   let applied = 0;
   const changedBlockIds: string[] = [];
 
@@ -1238,10 +1241,10 @@ function handlePatch(payload: PatchPayload): void {
   // completion. Remaining rest blocks continue on later rAFs, but
   // changed blocks (including the sentinel) are always in the first
   // flush.
-  const domApplyEnded = performance.now();
-  const domApplyEndedEpochMs = performance.timeOrigin + domApplyEnded;
-  const domApplyMs = +(domApplyEnded - domApplyStarted).toFixed(1);
-  const webviewQueueWaitMs = +(domApplyStarted - receivedAt).toFixed(3);
+  const domApplyEnded = isLab ? performance.now() : 0;
+  const domApplyEndedEpochMs = isLab ? performance.timeOrigin + domApplyEnded : 0;
+  const domApplyMs = isLab ? +(domApplyEnded - domApplyStarted).toFixed(1) : 0;
+  const webviewQueueWaitMs = isLab ? +(domApplyStarted - receivedAt).toFixed(3) : 0;
 
   // Emit performance marks for patched blocks
   for (const blockId of changedBlockIds) {
@@ -1250,54 +1253,39 @@ function handlePatch(payload: PatchPayload): void {
     } catch {}
   }
 
-  const appliedAt = domApplyEnded;
   if (applied > 0) {
-    Instrumentation.emit('patch-applied', domApplyMs, { gen: payload.generation, patches: applied });
-
-    if (__MARKDOWN_SOURCE_PREVIEW_LAB__) {
+    if (isLab && queueAtReceive) {
+      const appliedAt = domApplyEnded;
+      Instrumentation.emit('patch-applied', domApplyMs, { gen: payload.generation, patches: applied });
       // Report back to the host including DOM apply time
       const ackSentEpochMs = performance.timeOrigin + performance.now();
       const queueAfterFlush = renderQueue.telemetry;
-      const ackPayload = {
+      const record = {
         generation: payload.generation,
         blockIds: changedBlockIds,
         appliedAt,
-        domApplyMs,
-        webviewReceivedEpochMs,
-        domApplyStartedEpochMs,
-        domApplyEndedEpochMs,
-        ackSentEpochMs,
-        webviewQueueWaitMs,
-        queueLengthAtReceive: queueAtReceive.queueLength,
-        urgentQueueLengthAtReceive: queueAtReceive.urgentLength,
-        urgentStartWaitMs: renderQueue.telemetry.urgentStartWaitMs,
-        backgroundChunkLastMs: queueAfterFlush.backgroundChunkLastMs,
-        backgroundChunkMaxMs: queueAfterFlush.backgroundChunkMaxMs,
-        backgroundChunkCount: queueAfterFlush.backgroundChunkCount,
+        diagnostics: {
+          domApplyMs,
+          webviewReceivedEpochMs,
+          domApplyStartedEpochMs,
+          domApplyEndedEpochMs,
+          ackSentEpochMs,
+          webviewQueueWaitMs,
+          queueLengthAtReceive: queueAtReceive.queueLength,
+          urgentQueueLengthAtReceive: queueAtReceive.urgentLength,
+          urgentStartWaitMs: renderQueue.telemetry.urgentStartWaitMs,
+          backgroundChunkLastMs: queueAfterFlush.backgroundChunkLastMs,
+          backgroundChunkMaxMs: queueAfterFlush.backgroundChunkMaxMs,
+          backgroundChunkCount: queueAfterFlush.backgroundChunkCount,
+        },
       };
       postToHost({
         type: 'patch-applied',
-        payload: ackPayload,
+        payload: record,
       });
 
       // Record on window so diagnostics can read it via frame.evaluate()
-      (window as any).__MARKDOWN_SOURCE_PREVIEW_LAST_PATCH__ = {
-        generation: payload.generation,
-        blockIds: changedBlockIds,
-        appliedAt,
-        domApplyMs,
-        webviewReceivedEpochMs,
-        domApplyStartedEpochMs,
-        domApplyEndedEpochMs,
-        ackSentEpochMs,
-        webviewQueueWaitMs,
-        queueLengthAtReceive: queueAtReceive.queueLength,
-        urgentQueueLengthAtReceive: queueAtReceive.urgentLength,
-        urgentStartWaitMs: renderQueue.telemetry.urgentStartWaitMs,
-        backgroundChunkLastMs: queueAfterFlush.backgroundChunkLastMs,
-        backgroundChunkMaxMs: queueAfterFlush.backgroundChunkMaxMs,
-        backgroundChunkCount: queueAfterFlush.backgroundChunkCount,
-      };
+      (window as any).__MARKDOWN_SOURCE_PREVIEW_LAST_PATCH__ = record;
     }
   }
 

@@ -193,6 +193,10 @@ export class MermaidQueue {
     for (const output of root.querySelectorAll<HTMLElement>('[data-mermaid="true"]')) {
       this._refreshOutput(output, themeKey);
     }
+    // Theme attribute mutations do not trigger the childList observer, so
+    // schedule a sweep explicitly: stale outputs that landed in
+    // _pendingMargin during this pass get promoted on the next frame.
+    this._scheduleMarginSweep();
   }
 
   private _observeSubtree(node: HTMLElement): void {
@@ -428,6 +432,16 @@ export class MermaidQueue {
       for (const job of [...this._aheadJobs]) {
         if (this._root.contains(job.element) && this._isInViewport(job.element)) {
           this._promoteQueued(job.element);
+        }
+      }
+      // Self-heal stale rendered outputs (e.g. left behind by a theme
+      // change while outside the render margin): anything within the
+      // margin is re-observed so it re-renders with the current theme.
+      // _observeDiagram early-returns when the stored theme key already
+      // matches, so current-theme outputs are untouched.
+      for (const output of this._root.querySelectorAll<HTMLElement>('[data-mermaid="true"]')) {
+        if (output.dataset.mermaidState === 'stale' && this._isWithinRenderMargin(output)) {
+          this._observeDiagram(output, undefined);
         }
       }
       this._scheduleDrain();

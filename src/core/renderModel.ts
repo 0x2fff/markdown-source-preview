@@ -117,6 +117,12 @@ export interface PatchAppliedPayload {
   generation: number;
   blockIds: string[];
   appliedAt: number;
+  /** Diagnostics-build-only timings; absent in production builds. */
+  diagnostics?: PatchApplyDiagnostics;
+}
+
+/** Webview-side apply/queue timings reported with `patch-applied` acks. */
+export interface PatchApplyDiagnostics {
   /** Time from message receipt to renderQueue.flush() completion in the webview (ms). */
   domApplyMs: number;
   webviewReceivedEpochMs: number;

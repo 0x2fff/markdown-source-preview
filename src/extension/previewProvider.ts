@@ -664,12 +664,14 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
         }
         this._pendingPatches.delete(key);
 
+        const diagnostics = msg.payload.diagnostics;
+        if (!diagnostics) break;
         const patchAckMs = +(performance.now() - pending.sentAt).toFixed(1);
         const hostAckReceivedEpochMs = Date.now();
-        const domApplyMs = +msg.payload.domApplyMs.toFixed(1);
+        const domApplyMs = +diagnostics.domApplyMs.toFixed(1);
         pending.hostAckReceivedEpochMs = hostAckReceivedEpochMs;
-        const hostToWebviewReceiveMs = msg.payload.webviewReceivedEpochMs - pending.hostPatchSentEpochMs;
-        const webviewToHostAckMs = hostAckReceivedEpochMs - msg.payload.ackSentEpochMs;
+        const hostToWebviewReceiveMs = diagnostics.webviewReceivedEpochMs - pending.hostPatchSentEpochMs;
+        const webviewToHostAckMs = hostAckReceivedEpochMs - diagnostics.ackSentEpochMs;
 
         console.log(
           `[MARKDOWN_SOURCE_PREVIEW_PERF] patch-ack gen=${gen}` +
@@ -705,18 +707,18 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
               hostPatchSentEpochMs: pending.hostPatchSentEpochMs,
               hostAckReceivedEpochMs,
               hostToWebviewReceiveMs,
-              webviewQueueWaitMs: msg.payload.webviewQueueWaitMs,
-              webviewReceivedEpochMs: msg.payload.webviewReceivedEpochMs,
-              domApplyStartedEpochMs: msg.payload.domApplyStartedEpochMs,
-              domApplyEndedEpochMs: msg.payload.domApplyEndedEpochMs,
-              ackSentEpochMs: msg.payload.ackSentEpochMs,
+              webviewQueueWaitMs: diagnostics.webviewQueueWaitMs,
+              webviewReceivedEpochMs: diagnostics.webviewReceivedEpochMs,
+              domApplyStartedEpochMs: diagnostics.domApplyStartedEpochMs,
+              domApplyEndedEpochMs: diagnostics.domApplyEndedEpochMs,
+              ackSentEpochMs: diagnostics.ackSentEpochMs,
               webviewToHostAckMs,
-              queueLengthAtReceive: msg.payload.queueLengthAtReceive,
-              urgentQueueLengthAtReceive: msg.payload.urgentQueueLengthAtReceive,
-              urgentStartWaitMs: msg.payload.urgentStartWaitMs,
-              backgroundChunkLastMs: msg.payload.backgroundChunkLastMs,
-              backgroundChunkMaxMs: msg.payload.backgroundChunkMaxMs,
-              backgroundChunkCount: msg.payload.backgroundChunkCount,
+              queueLengthAtReceive: diagnostics.queueLengthAtReceive,
+              urgentQueueLengthAtReceive: diagnostics.urgentQueueLengthAtReceive,
+              urgentStartWaitMs: diagnostics.urgentStartWaitMs,
+              backgroundChunkLastMs: diagnostics.backgroundChunkLastMs,
+              backgroundChunkMaxMs: diagnostics.backgroundChunkMaxMs,
+              backgroundChunkCount: diagnostics.backgroundChunkCount,
             },
           },
         } satisfies HostToWebview);
@@ -1360,7 +1362,7 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
     const config = this._getConfig();
     const slice = sliceInitial(doc, {
       blockLimit: config.initialBlockLimit,
-      sourceByteLimit: config.initialSourceBytes,
+      htmlCharLimit: config.initialHtmlCharLimit,
     });
 
     const patches: BlockPatch[] = slice.restBlocks.map(b => ({
@@ -1512,7 +1514,7 @@ ${initialHtml}
     const cfg = vscode.workspace.getConfiguration('markdownSourcePreview');
     return {
       initialBlockLimit: cfg.get<number>('initialBlockLimit', 40),
-      initialSourceBytes: cfg.get<number>('initialSourceBytes', 98304),
+      initialHtmlCharLimit: cfg.get<number>('initialHtmlCharLimit', 98304),
       debounceMs: cfg.get<number>('debounceMs', 16),
     };
   }

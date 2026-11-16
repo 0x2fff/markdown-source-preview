@@ -293,24 +293,24 @@ export interface SliceResult {
 
 /**
  * Cuts the first viewport slice from a ParsedDocument. Stops at
- * `blockLimit` blocks or `sourceByteLimit` accumulated bytes, whichever
- * comes first.
+ * `blockLimit` blocks or `htmlCharLimit` accumulated HTML characters,
+ * whichever comes first.
  */
 export function sliceInitial(
   doc: ParsedDocument,
-  opts: { blockLimit: number; sourceByteLimit: number },
+  opts: { blockLimit: number; htmlCharLimit: number },
 ): SliceResult {
-  const { blockLimit, sourceByteLimit } = opts;
+  const { blockLimit, htmlCharLimit } = opts;
   const tRender = Date.now();
 
-  let byteCount = 0;
+  let htmlChars = 0;
   let cutIdx = 0;
 
   for (let i = 0; i < doc.blocks.length; i++) {
     const b = doc.blocks[i];
-    byteCount += b.html.length; // approximated by HTML length
+    htmlChars += b.html.length;
     cutIdx = i + 1;
-    if (cutIdx >= blockLimit || byteCount >= sourceByteLimit) {
+    if (cutIdx >= blockLimit || htmlChars >= htmlCharLimit) {
       break;
     }
   }
@@ -482,15 +482,15 @@ export function diffBlocks(prev: readonly RenderBlock[], next: readonly RenderBl
   const inserts: DiffResult['inserts'] = [];
   const deletes: DiffResult['deletes'] = [];
 
-  for (const b of next) {
+  for (let index = 0; index < next.length; index++) {
+    const b = next[index];
     const old = prevMap.get(b.id);
     if (!old) {
       // Anchor the insert before its canonical successor so restored or
       // reordered blocks keep their source position; null appends at the
       // end. Inserts are emitted in canonical order and applied in
       // reverse by the caller so the anchor already exists in the DOM.
-      const idx = next.indexOf(b);
-      const beforeId = idx + 1 < next.length ? next[idx + 1].id : null;
+      const beforeId = index + 1 < next.length ? next[index + 1].id : null;
       inserts.push({ block: b, beforeId });
     } else if (old.contentHash !== b.contentHash) {
       updates.push({ block: b, prevHash: old.contentHash });

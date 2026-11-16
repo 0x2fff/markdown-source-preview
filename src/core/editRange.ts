@@ -43,10 +43,9 @@ export function lineCount(text: string): number {
   return lineStartOffsets(text).length;
 }
 
-export function offsetForLine(text: string, line: number): number {
+function offsetAtLine(offsets: readonly number[], textLength: number, line: number): number {
   if (line <= 0) return 0;
-  const offsets = lineStartOffsets(text);
-  if (line >= offsets.length) return text.length;
+  if (line >= offsets.length) return textLength;
   return offsets[line];
 }
 
@@ -55,11 +54,10 @@ export function sourceRangeForLines(
   text: string,
   sourceStart: number,
   sourceEnd: number,
+  offsets: readonly number[] = lineStartOffsets(text),
 ): SourceRange {
-  const startOffset = offsetForLine(text, sourceStart);
-  const endOffset = sourceEnd >= lineCount(text)
-    ? text.length
-    : offsetForLine(text, sourceEnd);
+  const startOffset = offsetAtLine(offsets, text.length, sourceStart);
+  const endOffset = offsetAtLine(offsets, text.length, sourceEnd);
   return { startOffset, endOffset: Math.max(startOffset, endOffset) };
 }
 
@@ -175,10 +173,11 @@ export function findBlockSource(
   baseSourceHash: string,
   hash: (source: string) => string,
 ): LocatedBlock | null {
+  const offsets = lineStartOffsets(text);
   const byId = blocks.find(block => block.id === blockId);
   if (byId) {
     if (!isEditableBlockKind(byId.kind)) return null;
-    const range = sourceRangeForLines(text, byId.sourceStart, byId.sourceEnd);
+    const range = sourceRangeForLines(text, byId.sourceStart, byId.sourceEnd, offsets);
     const source = text.slice(range.startOffset, range.endOffset);
     return hash(source) === baseSourceHash ? { block: byId, range, source } : null;
   }
@@ -186,7 +185,7 @@ export function findBlockSource(
   const matches: LocatedBlock[] = [];
   for (const block of blocks) {
     if (!isEditableBlockKind(block.kind)) continue;
-    const range = sourceRangeForLines(text, block.sourceStart, block.sourceEnd);
+    const range = sourceRangeForLines(text, block.sourceStart, block.sourceEnd, offsets);
     const source = text.slice(range.startOffset, range.endOffset);
     if (hash(source) !== baseSourceHash) continue;
     matches.push({ block, range, source });
