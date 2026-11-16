@@ -130,7 +130,7 @@
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
-    "@types/node": "^20.0.0",
+    "@types/node": "^26.6.6",
     "@types/vscode": "1.90.0",
     "commonmark-spec": "0.31.2",
     "esbuild": "^0.24.0",
