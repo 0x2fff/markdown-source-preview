@@ -6,6 +6,7 @@ import { disposeInstrumentation, Instrumentation, isInstrumentationDisposed } fr
 import { editMetrics } from './editMetrics.js';
 import { editSave } from './editSaveController.js';
 import { InsertEditorController } from './insertEditorController.js';
+import { handleTextareaShortcut } from './textareaShortcuts.js';
 import { isEditableBlockKind } from '../core/renderModel.js';
 import {
   CodeEditorHighlight,
@@ -642,13 +643,17 @@ function beginBlockEditor(blockId: string, source: string): void {
     }, { signal: lifecycleController.signal });
   }
   textarea.addEventListener('keydown', event => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
-      event.preventDefault();
+    const shortcut = handleTextareaShortcut(event);
+    if (shortcut === 'native') return;
+    if (shortcut === 'save') {
       editor.commit();
-    } else if (event.key === 'Escape') {
-      event.preventDefault();
+      return;
+    }
+    if (shortcut === 'cancel') {
       cancel();
-    } else if (event.key === 'Tab'
+      return;
+    }
+    if (event.key === 'Tab'
       && (element.dataset.kind === 'bullet_list'
         || element.dataset.kind === 'ordered_list'
         || element.dataset.kind === 'mermaid')) {
@@ -674,7 +679,7 @@ function beginBlockEditor(blockId: string, source: string): void {
     } else if (!event.metaKey && !event.ctrlKey && !event.altKey && event.key.length === 1) {
       if (__MARKDOWN_SOURCE_PREVIEW_LAB__) editMetrics.markKeyInput();
     }
-  }, { signal: lifecycleController.signal });
+  }, { capture: true, signal: lifecycleController.signal });
   textarea.addEventListener('blur', () => {
     // Auto-save on blur; block-switch clicks keep a pending begin on the click side.
     if (_activeBlockEditor === editor) editor.commit();

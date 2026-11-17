@@ -1,5 +1,6 @@
 import type { BlockStore } from './blockStore.js';
 import type { WebviewToHost } from '../core/renderModel.js';
+import { handleTextareaShortcut } from './textareaShortcuts.js';
 
 type EditMode = 'read' | 'edit' | 'readonly';
 
@@ -186,15 +187,16 @@ export class InsertEditorController {
     this.active = { element, textarea, ...anchor };
     this.syncEmptyEditor();
     textarea.addEventListener('keydown', event => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
-        event.preventDefault();
+      const shortcut = handleTextareaShortcut(event);
+      if (shortcut === 'native') return;
+      if (shortcut === 'save') {
         this.commit(true);
-      } else if (event.key === 'Escape') {
-        event.preventDefault();
-        event.stopPropagation();
+        return;
+      }
+      if (shortcut === 'cancel') {
         this.commit(false);
       }
-    });
+    }, { capture: true });
     textarea.addEventListener('blur', () => this.commit(true));
     textarea.focus();
   }
