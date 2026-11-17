@@ -6,6 +6,7 @@ test/**
 corpora/**
 docs/**
 media/*.md
+media/demo.gif
 .bench/**
 **/*.map
 benchmark/**

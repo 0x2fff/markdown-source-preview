@@ -11,6 +11,8 @@ rendered block to edit its Markdown source in an inline source editor at the
 same position. The edit is applied to the original Markdown file, which
 remains the single source of truth. It is not a rich-text or WYSIWYG editor.
 
+![Markdown Source Preview demo](media/demo.gif)
+
 ## Features
 
 - **Viewport-first rendering** — large documents (multi-MB) render
