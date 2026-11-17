@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4
+
+- Fix native textarea shortcuts (select all, cut, copy, paste, undo,
+  redo) inside block and insert editors on macOS, where the VS Code
+  webview host suppresses the default handling
+- Route Cmd/Ctrl+S and Cmd/Ctrl+Enter to apply the current block, and
+  Escape to discard uncommitted edits, in both editors
+
 ## 0.1.3
 
 - Consolidate parser and protocol types; extract shared loaders and
