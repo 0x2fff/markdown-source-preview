@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0
+
+- Render TeX math with KaTeX, matching VS Code's built-in Markdown
+  support (@vscode/markdown-it-katex): inline `$...$` inside paragraphs
+  and `$$...$$` as its own block kind with inline source editing
+- Invalid formulas keep their source visible instead of failing the
+  block; currency text such as `$20` is not treated as math
+- KaTeX CSS and fonts are bundled into the extension and loaded as
+  local webview resources — no CDN and no CSP changes
+
 ## 0.1.4
 
 - Fix native textarea shortcuts (select all, cut, copy, paste, undo,

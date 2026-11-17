@@ -1393,6 +1393,9 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
     const styleUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this._ctx.extensionUri, 'media', 'preview.css'),
     );
+    const katexStyleUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._ctx.extensionUri, 'dist', 'katex', 'katex.min.css'),
+    );
 
     // CSP: script-src allows only the nonce and webview.js
     const csp = [
@@ -1410,6 +1413,7 @@ export class PreviewProvider implements vscode.CustomTextEditorProvider {
   <meta http-equiv="Content-Security-Policy" content="${escAttr(csp)}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="${escAttr(styleUri.toString())}">
+  <link rel="stylesheet" href="${escAttr(katexStyleUri.toString())}">
   <title>Markdown Source Preview</title>
 </head>
 <body>

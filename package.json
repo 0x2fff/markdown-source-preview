@@ -3,7 +3,7 @@
   "displayName": "Markdown Source Preview",
   "description": "A source-preserving Markdown preview with inline block editing.",
   "icon": "media/icon.png",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "publisher": "0x2fff",
   "license": "MIT",
   "preview": true,
@@ -111,7 +111,8 @@
   "scripts": {
     "vscode:prepublish": "npm run build",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
-    "build": "npm run clean && npm run build:ext && npm run build:webview",
+    "build": "npm run clean && npm run build:ext && npm run build:webview && npm run build:katex-assets",
+    "build:katex-assets": "node scripts/copy-katex-assets.mjs",
     "build:ext": "esbuild src/extension/extension.ts --bundle --platform=node --external:vscode --define:__MARKDOWN_SOURCE_PREVIEW_LAB__=false --minify --outfile=dist/extension.js",
     "build:webview": "esbuild src/webview/main.ts --bundle --platform=browser --format=esm --splitting --define:__MARKDOWN_SOURCE_PREVIEW_LAB__=false --minify --outdir=dist --entry-names=webview --chunk-names=chunks/[name]-[hash]",
     "typecheck": "tsc --noEmit",
@@ -119,11 +120,13 @@
     "package": "vsce package --no-dependencies",
     "build:lab:ext": "esbuild src/extension/extension.ts --bundle --platform=node --external:vscode --define:__MARKDOWN_SOURCE_PREVIEW_LAB__=true --outfile=dist/extension.js",
     "build:lab:webview": "esbuild src/webview/main.ts --bundle --platform=browser --format=esm --splitting --define:__MARKDOWN_SOURCE_PREVIEW_LAB__=true --outdir=dist --entry-names=webview --chunk-names=chunks/[name]-[hash]",
-    "build:diagnostics": "npm run clean && npm run build:lab:ext && npm run build:lab:webview"
+    "build:diagnostics": "npm run clean && npm run build:lab:ext && npm run build:lab:webview && npm run build:katex-assets"
   },
   "dependencies": {
     "@iconify-json/logos": "^1.2.20",
+    "@vscode/markdown-it-katex": "^1.1.2",
     "highlight.js": "^11.11.1",
+    "katex": "^0.16.47",
     "markdown-it": "^15.0.3",
     "markdown-it-task-lists": "^2.1.1",
     "mermaid": "^12.3.0"

@@ -27,6 +27,9 @@ remains the single source of truth. It is not a rich-text or WYSIWYG editor.
   preserved
 - **Mermaid diagrams** — lazy rendering with caching, bundled icon packs,
   Ctrl/Cmd+scroll zoom and Alt/Option+drag pan
+- **TeX math** — inline `$...$` and block `$$...$$` rendered with KaTeX,
+  matching VS Code's built-in Markdown support; block math is its own
+  editable block, and the KaTeX assets are bundled (no CDN)
 - **Scroll sync** — preview and source editor positions stay in sync
 - **Read-only safe** — non-writable documents open in a protected mode
 - **External-change conflict detection** — edits against stale documents
@@ -74,6 +77,7 @@ option ("Reopen Editor With…" → Markdown Source Preview).
 | Fenced code (syntax highlighted) | ✅ | ✅ |
 | Indented code | ✅ | ✅ |
 | Mermaid | ✅ | ✅ |
+| TeX math (`$$...$$`) | ✅ | ✅ |
 | Frontmatter (collapsible) | ✅ | ✅ |
 | Raw HTML | Escaped | ✅ |
 

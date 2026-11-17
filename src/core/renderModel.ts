@@ -9,6 +9,7 @@ export type BlockKind =
   | 'code_block'    // indented code block
   | 'table'         // GFM table
   | 'mermaid'       // ``` mermaid fence
+  | 'math'          // $$...$$ TeX block rendered with KaTeX
   | 'bullet_list'   // bullet list including nested items
   | 'ordered_list'  // ordered list including nested items
   | 'blockquote'
@@ -27,6 +28,7 @@ const EDITABLE_BLOCK_KINDS = new Set<string>([
   'code_block',
   'table',
   'mermaid',
+  'math',
   'html_block',
   'hr',
 ]);

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parseDocument } from '../../src/core/blockParser.js';
+import { isEditableBlockKind } from '../../src/core/renderModel.js';
 import { HighlightQueue } from '../../src/webview/highlightQueue.js';
 import { RenderQueue } from '../../src/webview/renderQueue.js';
 import type { BlockStore } from '../../src/webview/blockStore.js';
@@ -209,6 +210,38 @@ describe('HTML and URL safety', () => {
     assert.match(html, /src="vscode-webview-resource:\/\/workspace\/images\/a\.svg"/);
     assert.match(html, /src="https:\/\/example\.com\/a\.png"/);
     assert.doesNotMatch(html, /<img\b[^>]*src="[^"]*data:image/i);
+  });
+});
+
+describe('TeX math (KaTeX)', () => {
+  it('renders inline math inside a paragraph', () => {
+    const html = render('Inline: $E = mc^2$ done.');
+    assert.match(html, /<span class="katex">/);
+    assert.match(html, /<span class="katex-html"/);
+  });
+
+  it('renders block math as its own editable math block', () => {
+    const source = ['Before.', '', '$$', '\\int_0^1 x \\, dx', '$$', '', 'After.'].join('\n');
+    const doc = parseDocument(source, { uri: 'test:/document.md', generation: 1 });
+    assert.deepEqual(doc.blocks.map(block => block.kind), ['paragraph', 'math', 'paragraph']);
+    const math = doc.blocks[1];
+    assert.equal(math.sourceStart, 2);
+    assert.equal(math.sourceEnd, 5);
+    assert.match(math.html, /class="katex-block"/);
+    assert.match(math.html, /katex-display/);
+    assert.ok(isEditableBlockKind(math.kind));
+  });
+
+  it('does not treat currency amounts as math', () => {
+    const html = render('It costs $20 and $30 in total.');
+    assert.doesNotMatch(html, /class="katex/);
+    assert.match(html, /\$20 and \$30/);
+  });
+
+  it('keeps the source visible for an invalid formula instead of throwing', () => {
+    const html = render('$\\frac{1}$');
+    assert.match(html, /katex-error/);
+    assert.match(html, /\\frac/);
   });
 });
 

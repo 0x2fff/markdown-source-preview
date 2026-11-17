@@ -24,12 +24,18 @@ function getMd(): MarkdownIt {
   const MarkdownIt = require('markdown-it') as typeof import('markdown-it').default;
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const taskLists = require('markdown-it-task-lists');
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const markdownItKatex = (require('@vscode/markdown-it-katex') as typeof import('@vscode/markdown-it-katex')).default;
   _md = new MarkdownIt({
     html: false,
     linkify: true,
     typographer: false,
     highlight: null, // highlighting is applied lazily in the webview
-  }).use(taskLists, { enabled: false, label: true, labelAfter: true });
+  }).use(taskLists, { enabled: false, label: true, labelAfter: true })
+    // TeX math ($...$ / $$...$$), matching VS Code's built-in Markdown
+    // support. throwOnError keeps the source visible for invalid formulas
+    // instead of failing the whole block.
+    .use(markdownItKatex, { throwOnError: false, strict: 'warn' });
   // linkify-it v6 (markdown-it v15) disables fuzzy `www.` links by default;
   // restore the previous autolink behavior explicitly.
   _md.linkify.set({ fuzzyLink: true });
@@ -75,6 +81,7 @@ function inferKind(token: Token): BlockKind {
   if (type === 'ordered_list_open') return 'ordered_list';
   if (type === 'blockquote_open') return 'blockquote';
   if (type === 'html_block') return 'html_block';
+  if (type === 'math_block') return 'math';
   if (type === 'hr') return 'hr';
   if (type === 'paragraph_open') return 'paragraph';
   return 'other';

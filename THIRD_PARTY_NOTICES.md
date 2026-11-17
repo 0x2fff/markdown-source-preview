@@ -9,6 +9,8 @@ Versions are pinned in `package-lock.json`.
 |---|---|---|
 | markdown-it | MIT | Markdown parsing/rendering |
 | markdown-it-task-lists | ISC | GFM task lists |
+| @vscode/markdown-it-katex | MIT | TeX math parsing (VS Code's KaTeX plugin) |
+| katex | MIT | TeX math rendering; CSS/fonts copied into dist/ |
 | highlight.js | BSD-3-Clause | Syntax highlighting (lazy-loaded) |
 | mermaid | MIT | Diagram rendering (lazy-loaded) |
 | @iconify-json/logos | CC0-1.0 | Mermaid architecture icon pack (lazy-loaded) |
